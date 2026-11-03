@@ -1,6 +1,6 @@
 # James Viewer: hand-over
 
-Branch `feature/windows-document-viewer`. Version 1.0.0 is commit `7054319`, and 1.1.0 is commit `eb8d441`. Version 1.1.1 is not committed yet; wait for the user to ask. The current state and every known limit are in `docs/TEST_REPORT.md`.
+Branch `feature/windows-document-viewer`. Version 1.0.0 is commit `7054319`, 1.1.0 is `eb8d441`, and 1.1.1 is `1661407`. Commit only when the user asks. The current state and every known limit are in `docs/TEST_REPORT.md`.
 
 ## Built
 
