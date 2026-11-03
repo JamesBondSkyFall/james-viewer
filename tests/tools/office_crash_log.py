@@ -33,7 +33,7 @@ def main() -> None:
             shutil.copytree(seed, profile)
         else:
             office_engine._write_profile(profile)
-        url = "file:///" + str(profile).replace("\\", "/")
+        url = profile.resolve().as_uri()
         log_path = out / f"log-{number}.txt"
         with open(log_path, "wb") as log:
             soffice = subprocess.Popen(

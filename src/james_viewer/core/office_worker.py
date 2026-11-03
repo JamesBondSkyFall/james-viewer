@@ -12,7 +12,10 @@ import time
 import uno
 from com.sun.star.beans import PropertyValue
 
-EMBEDDED_OBJECT_SETTLE_SECONDS = 0.3
+# The office keeps working after a load reports that it has finished. Going straight on crashes it
+# on some decks, either while changing master-page styles (a chart, about 1 start in 13) or while
+# closing (two large pictures, 6 starts in 25). Waiting this long first gave no crashes in 105 starts.
+SETTLE_SECONDS = 0.3
 
 
 def prop(name, value):
@@ -55,23 +58,16 @@ def page_flags(document):
     return flags
 
 
-def has_embedded_objects(document):
-    pages = document.getDrawPages()
-    for index in range(pages.getCount()):
-        page = pages.getByIndex(index)
-        for position in range(page.getCount()):
-            if page.getByIndex(position).supportsService("com.sun.star.drawing.OLE2Shape"):
-                return True
-    return False
+def close_after_saving(document):
+    """The result is already saved, so a crash here loses nothing. The next request starts a new office."""
+    try:
+        document.close(True)
+    except Exception:
+        pass
 
 
 def match_powerpoint_spacing(document):
-    """PowerPoint adds no automatic gap between Chinese and Latin text; the office engine does.
-
-    Changing master-page styles right after loading a deck with a chart crashes the office in
-    about 1 start in 13. Waiting first gave no failures in 80 starts, and decks without embedded
-    objects did not crash at all, so only those decks pay for the wait.
-    """
+    """PowerPoint adds no automatic gap between Chinese and Latin text; the office engine does."""
     families = document.getStyleFamilies()
     for family_name in families.getElementNames():
         family = families.getByName(family_name)
@@ -109,12 +105,13 @@ def handle(desktop, request):
         document = load(desktop, request["input"])
         try:
             hidden = page_flags(document)
-            if has_embedded_objects(document):
-                time.sleep(EMBEDDED_OBJECT_SETTLE_SECONDS)
+            time.sleep(SETTLE_SECONDS)
             match_powerpoint_spacing(document)
             export_pdf(document, request["output"])
-        finally:
+        except Exception:
             document.close(True)
+            raise
+        close_after_saving(document)
         return {"pages": len(hidden), "hidden": hidden}
     if op == "pptx":
         document = load(desktop, request["input"])
@@ -123,8 +120,10 @@ def handle(desktop, request):
                 uno.systemPathToFileUrl(request["output"]),
                 (prop("FilterName", "Impress MS PowerPoint 2007 XML"),),
             )
-        finally:
+        except Exception:
             document.close(True)
+            raise
+        close_after_saving(document)
         return {}
     raise ValueError("unknown request " + repr(op))
 

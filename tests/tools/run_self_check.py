@@ -14,7 +14,9 @@ buffer = ctypes.create_unicode_buffer(600)
 ctypes.windll.shell32.SHGetFolderPathW(0, 0x10, 0, 0, buffer)
 report = Path(buffer.value) / "James Viewer self-check.txt"
 report.unlink(missing_ok=True)
-code = subprocess.run([str(app / "James Viewer.exe"), "--self-check", "--quiet"], env={**os.environ, "JAMES_VIEWER_DATA_DIR": str(data)}, timeout=240).returncode
+environment = {key: value for key, value in os.environ.items() if not key.startswith("JAMES_VIEWER")}
+environment["LOCALAPPDATA"] = str(data)
+code = subprocess.run([str(app.resolve() / "James Viewer.exe"), "--self-check", "--quiet"], env=environment, timeout=240).returncode
 print("exit code", code)
 print(report.read_text(encoding="utf-8") if report.exists() else "no report was written")
 report.unlink(missing_ok=True)

@@ -11,7 +11,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-os.environ.setdefault("JAMES_VIEWER_DATA_DIR", tempfile.mkdtemp(prefix="james-viewer-test-data-"))
+# Like the real default, "James Viewer" under AppData, this has a space in it. A folder without one
+# once hid a bug that stopped every PowerPoint file from opening on a normal install.
+os.environ.setdefault("JAMES_VIEWER_DATA_DIR", tempfile.mkdtemp(prefix="James Viewer 测试 "))
 if "JAMES_VIEWER_OFFICE_DIR" not in os.environ:
     trimmed = ROOT / ".build" / "office" / "program" / "soffice.exe"
     os.environ["JAMES_VIEWER_OFFICE_DIR"] = str(trimmed.parents[1] if trimmed.exists() else ROOT / ".build" / "lo-full")

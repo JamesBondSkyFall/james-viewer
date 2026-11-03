@@ -1,4 +1,4 @@
 """James Viewer: a small offline viewer and page organiser for PDF and PowerPoint files."""
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 APP_NAME = "James Viewer"

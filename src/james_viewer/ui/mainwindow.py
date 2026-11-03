@@ -55,6 +55,7 @@ class MainWindow(QMainWindow):
         self.views: list[DocumentView] = []
         self.presenter: Presenter | None = None
         self.nav_mode = "view"
+        self._closing = False
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(icons.app_icon())
         self.resize(1400, 880)
@@ -411,6 +412,8 @@ class MainWindow(QMainWindow):
         view.focus_page()
 
     def _document_failed(self, document: Document, text: str) -> None:
+        if self._closing:
+            return  # a message box here would keep the closing app alive until someone clicked OK
         widgets.tell(self, f"Problem with {document.name}", text)
 
     def _update_tab(self, document: Document) -> None:
@@ -821,6 +824,7 @@ class MainWindow(QMainWindow):
             if not widgets.ask(self, "Quit without saving?", f"These have unsaved changes: {names}", "Quit without saving", "Keep working", danger=True):
                 event.ignore()
                 return
+        self._closing = True
         if self.presenter is not None:
             self.presenter.close()
         for view in self.views:

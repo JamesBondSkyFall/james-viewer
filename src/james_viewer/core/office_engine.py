@@ -28,7 +28,7 @@ CHUNK_SIZE = 32
 PROFILE_SEED = "james-profile"
 ENGINE_ATTEMPTS = 3
 CALL_TIMEOUT = 600.0
-START_TIMEOUT = 120.0
+START_TIMEOUT = 45.0
 
 _REGISTRY = """<?xml version="1.0" encoding="UTF-8"?>
 <oor:items xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
@@ -194,6 +194,10 @@ class _Job:
         kernel.CloseHandle(self.handle)
 
 
+class OfficeStartTimeout(OfficeEngineError):
+    """The office neither came up nor exited."""
+
+
 def _child_env() -> dict:
     env = {
         key: value
@@ -254,6 +258,7 @@ class OfficeWorker:
         self.office = office.resolve()
         self.slot = slot
         self.pipe = f"james_viewer_{os.getpid()}_{slot}_{uuid.uuid4().hex[:6]}"
+        self.closing = False
         self.soffice: subprocess.Popen | None = None
         self.bridge: subprocess.Popen | None = None
         self.job: _Job | None = None
@@ -282,7 +287,9 @@ class OfficeWorker:
             shutil.copytree(seed, profile)
         else:
             _write_profile(profile)
-        profile_url = "file:///" + str(profile).replace("\\", "/")
+        # This has to be a real URL. The default data folder is "James Viewer", and an unencoded space
+        # stops the office from ever coming up.
+        profile_url = profile.as_uri()
         self.soffice = self._spawn(
             [
                 str(program / "soffice.exe"),
@@ -308,7 +315,7 @@ class OfficeWorker:
             encoding="utf-8",
             bufsize=1,
         )
-        reply = self._read_line(START_TIMEOUT)
+        reply = self._read_line(START_TIMEOUT, starting=True)
         if not reply.get("ready"):
             self.stop()
             raise OfficeEngineError(f"The office engine failed to start: {reply.get('error', 'no response')}")
@@ -316,21 +323,35 @@ class OfficeWorker:
     def alive(self) -> bool:
         return self.bridge is not None and self.bridge.poll() is None
 
-    def _read_line(self, timeout: float) -> dict:
+    def _read_line(self, timeout: float, *, starting: bool = False) -> dict:
         result: queue.Queue = queue.Queue()
+        stream = self.bridge.stdout
 
         def reader():
             try:
-                result.put(self.bridge.stdout.readline())
+                result.put(stream.readline())
             except (OSError, ValueError) as exc:
                 result.put(exc)
 
         threading.Thread(target=reader, daemon=True).start()
-        try:
-            line = result.get(timeout=timeout)
-        except queue.Empty:
-            self.stop()
-            raise OfficeEngineError("The office engine stopped responding and was restarted.") from None
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                line = result.get(timeout=0.2)
+                break
+            except queue.Empty:
+                pass
+            if self.closing:
+                self.stop()
+                raise OfficeEngineError("James Viewer is closing.")
+            if starting and self.soffice.poll() is not None:
+                self.stop()
+                raise OfficeEngineError("The office engine stopped while it was starting.")
+            if time.monotonic() > deadline:
+                self.stop()
+                if starting:
+                    raise OfficeStartTimeout("The office engine did not start. PowerPoint files cannot be displayed right now.")
+                raise OfficeEngineError("The office engine stopped responding and was restarted.")
         if isinstance(line, Exception) or not line:
             self.stop()
             raise OfficeEngineError("The office engine stopped unexpectedly and was restarted.")
@@ -345,6 +366,13 @@ class OfficeWorker:
         reply = self._read_line(timeout)
         self.last_used = time.monotonic()
         return reply
+
+    def kill(self) -> None:
+        """End a call in progress, from another thread. The thread making the call cleans up."""
+        self.closing = True
+        job = self.job
+        if job is not None:
+            job.terminate()
 
     def stop(self) -> None:
         """Stop the office and return only once every process of it has gone.
@@ -416,8 +444,12 @@ class OfficeEngine:
     def _call_with_restarts(self, op: str, args: dict) -> dict:
         """If the office process crashes, as opposed to rejecting the file, start a new one and retry."""
         for attempt in range(ENGINE_ATTEMPTS):
+            if self._closed:
+                raise OfficeEngineError("James Viewer is closing.")
             try:
                 reply = self._worker.call(op, **args)
+            except OfficeStartTimeout:
+                raise  # a start that hangs would only hang again, with the user still waiting
             except OfficeEngineError as exc:
                 if attempt == ENGINE_ATTEMPTS - 1:
                     raise
@@ -495,6 +527,9 @@ class OfficeEngine:
 
     def close(self) -> None:
         self._closed = True
+        worker = self._worker
+        if worker is not None:
+            worker.kill()  # a call in progress would otherwise hold the lock, and freeze the window, for minutes
         with self._lock:
             if self._worker is not None:
                 self._worker.stop()

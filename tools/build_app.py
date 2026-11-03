@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / ".build"
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 DIST = ROOT / "dist" / VERSION / "x64"
 
 # Parts of the packaged Qt that James Viewer does not load.

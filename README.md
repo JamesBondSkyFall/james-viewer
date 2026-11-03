@@ -5,8 +5,8 @@ A small Windows app, for x64 and ARM64 PCs, for viewing PDF, PPT, PPTX and Markd
 ## Getting started
 
 1. Unzip the package for your PC anywhere, such as your Documents folder. Nothing is installed.
-   - Most PCs: `James-Viewer-1.1.0-win-x64-portable.zip`
-   - ARM64 PCs, such as the Surface Laptop 7: `James-Viewer-1.1.0-win-arm64-portable.zip`
+   - Most PCs: `James-Viewer-1.1.1-win-x64-portable.zip`
+   - ARM64 PCs, such as the Surface Laptop 7: `James-Viewer-1.1.1-win-arm64-portable.zip`
 2. Run `James Viewer\James Viewer.exe`.
 3. Choose files, or drop them anywhere in the window.
 

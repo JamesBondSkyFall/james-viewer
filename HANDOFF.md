@@ -1,12 +1,12 @@
 # James Viewer: hand-over
 
-Branch `feature/windows-document-viewer`. Version 1.0.0 is commit `7054319`. Version 1.1.0 is not committed yet; wait for the user to ask. The current state and every known limit are in `docs/TEST_REPORT.md`.
+Branch `feature/windows-document-viewer`. Version 1.0.0 is commit `7054319`, and 1.1.0 is commit `eb8d441`. Version 1.1.1 is not committed yet; wait for the user to ask. The current state and every known limit are in `docs/TEST_REPORT.md`.
 
 ## Built
 
-- `dist/1.1.0/x64/James Viewer/James Viewer.exe` and `dist/1.1.0/James-Viewer-1.1.0-win-x64-portable.zip`
-- `dist/1.1.0/arm64/James Viewer/James Viewer.exe` and `dist/1.1.0/James-Viewer-1.1.0-win-arm64-portable.zip`, which have never been run
-- `dist/James Viewer` is the old 1.0.0. Leave it alone while the user may still have it open.
+- `dist/1.1.1/x64/James Viewer/James Viewer.exe` and `dist/1.1.1/James-Viewer-1.1.1-win-x64-portable.zip`
+- `dist/1.1.1/arm64/James Viewer/James Viewer.exe` and `dist/1.1.1/James-Viewer-1.1.1-win-arm64-portable.zip`, which have never been run
+- `dist/James Viewer` (1.0.0) and `dist/1.1.0` are older, and neither can open PowerPoint files on a normal install. Leave them alone while the user may still have one open.
 
 ## Waiting on the user
 
@@ -24,7 +24,7 @@ It needs an unlocked PC and takes over the keyboard and mouse for about a minute
 .venv\Scripts\python tests\tools\blackbox.py "<unpacked James Viewer folder>" .build\blackbox .build\testdata\new\00-深度学习简介.pptx tests\fixtures\real-chinese.pdf tests\fixtures\plain.pdf "X:\Machine Learning\day05_聚类算法&pytorch框架\02-笔记\01-PyTorch框架\01-PyTorch框架使用.md" .build\testdata\bug\ember.pdf
 ```
 
-`ember.pdf` is a copy of the user's 709-page `H:\Others\战争的余烬.pdf`. 39 of 39 checks passed on 1.1.0.
+`ember.pdf` is a copy of the user's 709-page `H:\Others\战争的余烬.pdf`. 42 of 42 checks passed on 1.1.1, using a copy of the user's CNN deck in place of `00-深度学习简介.pptx`. The test refuses to send keys if another window takes the focus, so it can stop partway while the PC is in use.
 
 ## Possible next step
 
@@ -32,7 +32,8 @@ PPS, PPSX and ODP, which the user deferred.
 
 ## Hard-won facts
 
-- The office crash came from changing master-page styles right after loading a deck with a chart. The worker waits 0.3 s first, only for decks with embedded objects, and the engine retries up to 3 attempts. Removing that wait brings the crash back.
+- Test with the real data folder. `AppData\Local\James Viewer` has a space, and an unencoded space in the profile address stopped the engine from starting, so no PowerPoint file could open on a normal install. Tests that set their own folder without a space hid this until 1.1.1. Pass `Path.as_uri()` to LibreOffice, and set `LOCALAPPDATA` in tests to use the normal path.
+- The office keeps working after a load reports it has finished. Going straight on crashes it on some decks, while changing master-page styles (a chart) or while closing (large pictures). The worker always waits 0.3 s, and a crash after saving does not count as a failure. Removing that wait brings the crash back. These crashes depend on timing, so measure over many starts with `tests/tools/office_repeat.py`.
 - `msoffcrypto` must not be used to decrypt `.ppt`: it damages the document stream and skips pictures. `core/security.py` does this itself, and LibreOffice cannot open locked `.ppt` files at all.
 - A widget's cursor only applies once the mouse moves, so full screen uses the application-wide override in `CursorAutoHide`.
 - `tools/office_removable.json` is the verified trim list. Rebuild the bundle with `tools/build_office.py`, which also creates the finished profile.

@@ -1,10 +1,27 @@
-# James Viewer 1.1.0: test report
+# James Viewer 1.1.1: test report
 
 Tested on Windows 11 x64, 16 GB RAM, 2880×1800 at 200% scaling.
 
 ## Status
 
-**All automated tests and all real-input checks pass on the x64 package of 1.1.0, and it passes its self-check.** The ARM64 package has never been run. The limits that remain are listed under [Not supported or not done](#not-supported-or-not-done).
+**All automated tests and real-input checks pass on the x64 package of 1.1.1, it passes its self-check, and all 35 documents in `Learning with notes` open.** The ARM64 package has never been run. The limits that remain are listed under [Not supported or not done](#not-supported-or-not-done).
+
+## Fixed in 1.1.1
+
+- **No PowerPoint file could open on a normal install, in any earlier version.** The default data folder is `AppData\Local\James Viewer`, and an unencoded space in the profile address stopped the office engine from starting. The app showed nothing for minutes. Every earlier test passed because each one set its own data folder without a space. The tests and the real-input test now use a folder with a space and Chinese characters, or the normal default, so this cannot hide again.
+- **A failing office engine took minutes to report.** A start that hangs now gives up once, after 45 seconds, and an engine that dies while starting is noticed at once.
+- **Closing the window during a render froze the app** until Windows closed it. It now closes in about 0.2 s (5 of 5 in the packaged exe), with no message and nothing left behind.
+- **Some decks crashed the office engine at random.** A batch of `course-draft.pptx` with two large pictures crashed 6 of 25 starts, while the deck was closing, after its PDF was saved. The worker now always waits 0.3 s after loading (0 of 25, then 0 of 40), and a crash after saving no longer counts as a failure. Each batch of slides takes 0.3 s longer.
+
+## Real files
+
+Each file was opened in the real window with the normal data folder, and every page was checked. Copies were used, and the originals' hashes are unchanged.
+
+| Files | Result |
+|---|---|
+| `Learning with notes`: 29 PPTX and 6 Markdown | 35 of 35 open, 1,904 pages, none blank |
+| Files I test with: 26 PDF, PPT, PPTX and Markdown | 13 open normally. The other 13 are damaged or locked on purpose: 8 give a clear message and 5 ask for a password |
+| The 709-page book | Opens. Pages 2, 5, 706 and 708 are blank in the file itself |
 
 ## Fixed in 1.1.0
 
@@ -14,7 +31,7 @@ Tested on Windows 11 x64, 16 GB RAM, 2880×1800 at 200% scaling.
 
 ## Automated tests
 
-172 of 172 pass, driving the real window on the trimmed office bundle, on an unlocked PC.
+185 of 185 pass, driving the real window on the trimmed office bundle, on an unlocked PC.
 
 ## ARM64 package
 
@@ -28,7 +45,11 @@ Built on this x64 PC by `tools/build_arm64.py`, because PyInstaller cannot build
 
 ## Packaged exe with real input
 
-39 of 39 checks pass on the x64 package of 1.1.0, unzipped from the portable zip into a separate folder, using real key presses and real mouse input. Ten checks are new in 1.1.0:
+42 of 42 checks pass on the x64 package of 1.1.1, unzipped from the portable zip into a separate folder, using real key presses and real mouse input. The test now finds its data folder the normal way, named `James Viewer`, under a parent folder with a space and Chinese characters. The deck used was a copy of `Convolutional_Neural_Networks_English.pptx`.
+
+Partway through the long-PDF section, another window took the keyboard focus, and the test stopped rather than send keys to it. What took the focus was not identified. That section and the last check were run again on their own, and they passed.
+
+Three checks are new in 1.1.1: PowerPoint renders with the normal data folder, closing during a first render exits at once with no message (0.13 s), and nothing is left behind after that. Ten checks were new in 1.1.0:
 
 - **Keeping your place in Markdown:** hiding and showing the layout, hiding and showing the control panel, and entering and leaving full screen each return to a pixel-identical view (difference 0.0). Scrolling in full screen carries back to the window.
 - **Control panel:** the app icon stays at the top left while the panel is hidden.
@@ -47,7 +68,7 @@ Moving the mouse in full screen shows the pointer until it has rested for 1.5 se
 
 ## Packaged exe, measured from a separate folder
 
-Measured on 1.0.0, except that the real-input run on 1.1.0 timed startup at 0.99 s at best, while this PC was also busy with other work. Only the startup row was measured again.
+Measured on 1.0.0, except that the real-input run on 1.1.1 confirmed startup at 0.81 s at best. Each batch of slides now takes 0.3 s longer than these first-open times show.
 
 | Measure | Result |
 |---|---|
@@ -105,7 +126,7 @@ Three problems found by comparing and fixed: false line breaks in no-wrap text, 
 
 **Originals:** hashes unchanged in every test that opens them. Replacing an original needs an explicit confirmation.
 
-**Stability:** after the fixes, 120 renders of chart decks with fresh engine starts had 0 failures. A crash would restart the engine and retry, up to 3 attempts.
+**Stability:** with the wait applied to chart decks, 120 renders with fresh engine starts had 0 failures. The wider 1.1.1 wait gave 0 failures in 40 more on a deck with large pictures. A crash would restart the engine and retry, up to 3 attempts.
 
 ## Not supported or not done
 

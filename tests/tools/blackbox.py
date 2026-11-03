@@ -139,8 +139,9 @@ def check(name: str, passed: bool, detail="") -> None:
 
 
 def launch(exe: Path, data: Path, *files: str) -> subprocess.Popen:
+    """Start it as a user would, with no override, so it finds its data folder the normal way."""
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith(("JAMES_VIEWER", "PYTHON", "QT_"))}
-    env["JAMES_VIEWER_DATA_DIR"] = str(data)
+    env["LOCALAPPDATA"] = str(data.parent)
     return subprocess.Popen([str(exe), *files], env=env, cwd=str(Path(tempfile.gettempdir())))
 
 
@@ -374,8 +375,9 @@ def main() -> int:
     folder, out = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve()
     deck, pdf, drop = [str(Path(p).resolve()) for p in sys.argv[3:6]]
     out.mkdir(parents=True, exist_ok=True)
-    data = out / "data"
-    shutil.rmtree(data, ignore_errors=True)
+    data = out / "Local App Data 测试" / "James Viewer"
+    shutil.rmtree(data.parent, ignore_errors=True)
+    data.mkdir(parents=True)
     exe = folder / "James Viewer.exe"
 
     # Startup time and memory with nothing open, measured over three runs.
@@ -413,6 +415,8 @@ def main() -> int:
     results["pptx_window_seconds"] = round(time.perf_counter() - started, 2)
     assert wait(lambda: any("soffice" in p["Name"] for p in folder_processes(folder)), 30)
     time.sleep(14)
+    rendered = list((data / "cache").glob("*/chunk-*.pdf"))
+    check("PowerPoint renders with the normal data folder", bool(rendered), f"{len(rendered)} batches, data folder name {data.name!r}")
     hwnd = next(h for h in windows_of(pid) if Path(deck).name in title_of(h))
     grab(out / "01-main-window.png")
     processes = folder_processes(folder)
@@ -486,6 +490,26 @@ def main() -> int:
         process.kill()
     time.sleep(1.5)
     check("no office process left behind", not folder_processes(folder), folder_processes(folder))
+
+    # Closing during a first render once froze the app, and later stopped it behind a message box.
+    fresh = out / "Local App Data 2 测试" / "James Viewer"
+    shutil.rmtree(fresh.parent, ignore_errors=True)
+    fresh.mkdir(parents=True)
+    process = launch(exe, fresh, deck)
+    wait(lambda: any(Path(deck).name in title_of(h) for h in windows_of(process.pid)), 30)
+    time.sleep(1.0)
+    closing = next(h for h in windows_of(process.pid) if Path(deck).name in title_of(h))
+    started = time.perf_counter()
+    user32.PostMessageW(closing, 0x0010, 0, 0)
+    try:
+        process.wait(8)
+        check("closing during a first render exits at once, with no message", True, f"{time.perf_counter() - started:.2f}s")
+    except subprocess.TimeoutExpired:
+        check("closing during a first render exits at once, with no message", False, [title_of(h) for h in windows_of(process.pid)])
+        grab(out / "06-close-during-render.png")
+        process.kill()
+    time.sleep(1.0)
+    check("nothing is left behind after closing during a render", not folder_processes(folder), folder_processes(folder))
 
     if len(sys.argv) > 6:
         markdown_checks(exe, data, out, str(Path(sys.argv[6]).resolve()), folder)

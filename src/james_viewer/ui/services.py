@@ -206,6 +206,7 @@ class Workspace(QObject):
         self.page_clipboard: dict | None = None
         self.service.start()
         self._signals: set[_TaskSignals] = set()
+        self._shut_down = False
 
     def run(self, function: Callable[[], Any], on_done: Callable[[Any], None] | None = None,
             on_failed: Callable[[ViewerError], None] | None = None, office: bool = False) -> None:
@@ -219,14 +220,14 @@ class Workspace(QObject):
 
         def done(result: Any) -> None:
             try:
-                if on_done:
+                if on_done and not self._shut_down:
                     on_done(result)
             finally:
                 finish()
 
         def failed(error: ViewerError) -> None:
             try:
-                if on_failed:
+                if on_failed and not self._shut_down:  # work cut short by closing is no problem to report
                     on_failed(error)
             finally:
                 finish()
@@ -236,9 +237,10 @@ class Workspace(QObject):
         (self.office_pool if office else self.pool).start(_Task(function, signals))
 
     def shutdown(self) -> None:
+        self._shut_down = True
         self.service.stop()
-        self.pool.waitForDone(3000)
         self.office.close()
+        self.pool.waitForDone(3000)
         self.office_pool.waitForDone(3000)
         self.pdfium.close_all()
         self.session.close()

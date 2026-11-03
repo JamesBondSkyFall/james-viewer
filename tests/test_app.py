@@ -898,3 +898,132 @@ def test_moving_the_mouse_over_blank_paper_is_safe(ui, work):
     QTest.mouseMove(canvas.viewport(), blank.toPoint() + QPoint(6, 6))
     QTest.mouseRelease(canvas.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, blank.toPoint() + QPoint(6, 6))
     assert not canvas.has_selection
+
+
+# -- the office engine, wherever it runs ------------------------------------------------------------
+
+
+def _renders_a_deck(deck: Path, out: Path) -> None:
+    from james_viewer.core.office_engine import OfficeEngine
+
+    engine = OfficeEngine()
+    try:
+        engine.to_pdf(deck, out)
+    finally:
+        engine.close()
+    assert out.stat().st_size > 1000
+
+
+def test_powerpoint_works_in_the_default_data_folder(work, monkeypatch):
+    from james_viewer import APP_NAME
+    from james_viewer.core import paths
+
+    monkeypatch.delenv("JAMES_VIEWER_DATA_DIR", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(work / "Local App Data"))
+    assert paths.data_dir() == work / "Local App Data" / APP_NAME
+    assert " " in APP_NAME, "this is the case a folder without a space would hide"
+    _renders_a_deck(FIXTURES / "rich.pptx", work / "out.pdf")
+
+
+@pytest.mark.parametrize("folder", ["数据 中文", "a&b #1 100%", "O'Brien (copy) $x"])
+def test_powerpoint_works_in_awkward_data_folders(work, monkeypatch, folder):
+    (work / folder).mkdir()
+    monkeypatch.setenv("JAMES_VIEWER_DATA_DIR", str(work / folder))
+    _renders_a_deck(FIXTURES / "rich.pptx", work / "out.pdf")
+
+
+@pytest.mark.parametrize("name", ["with space 中文 & #1 100%.pptx", "O'Brien (copy) $x.pptx"])
+def test_powerpoint_opens_decks_with_awkward_names(work, name):
+    deck = work / name
+    shutil.copyfile(FIXTURES / "rich.pptx", deck)
+    _renders_a_deck(deck, work / "out.pdf")
+
+
+@pytest.mark.parametrize("delay", [0.2, 1.5])
+def test_closing_during_a_render_does_not_freeze(work, delay):
+    import threading
+    import time
+
+    from james_viewer.core.errors import ViewerError
+    from james_viewer.core.office_engine import OfficeEngine
+
+    engine = OfficeEngine()
+    outcome = []
+
+    def render():
+        try:
+            engine.to_pdf(FIXTURES / "rich.pptx", work / "out.pdf")
+            outcome.append("finished")
+        except ViewerError:
+            outcome.append("stopped")
+
+    thread = threading.Thread(target=render)
+    thread.start()
+    time.sleep(delay)
+    started = time.monotonic()
+    engine.close()
+    assert time.monotonic() - started < 6.0
+    thread.join(6.0)
+    assert not thread.is_alive() and outcome
+
+
+def _office_replaced_by(monkeypatch, command: list[str]) -> None:
+    from james_viewer.core.office_engine import OfficeWorker
+
+    real = OfficeWorker._spawn
+
+    def spawn(self, arguments, **options):
+        return real(self, command if arguments[0].endswith("soffice.exe") else arguments, **options)
+
+    monkeypatch.setattr(OfficeWorker, "_spawn", spawn)
+
+
+def test_an_office_that_dies_while_starting_is_reported_quickly(work, monkeypatch):
+    import time
+
+    from james_viewer.core.errors import OfficeEngineError
+    from james_viewer.core.office_engine import OfficeEngine
+
+    _office_replaced_by(monkeypatch, ["cmd", "/c", "exit 1"])
+    engine = OfficeEngine()
+    started = time.monotonic()
+    try:
+        with pytest.raises(OfficeEngineError):
+            engine.to_pdf(FIXTURES / "rich.pptx", work / "out.pdf")
+    finally:
+        engine.close()
+    assert time.monotonic() - started < 20.0
+
+
+def test_an_office_that_hangs_while_starting_gives_up_once(work, monkeypatch):
+    import time
+
+    from james_viewer.core import office_engine
+    from james_viewer.core.office_engine import OfficeEngine, OfficeStartTimeout
+
+    monkeypatch.setattr(office_engine, "START_TIMEOUT", 2.0)
+    _office_replaced_by(monkeypatch, ["ping", "-n", "60", "127.0.0.1"])
+    engine = OfficeEngine()
+    started = time.monotonic()
+    try:
+        with pytest.raises(OfficeStartTimeout):
+            engine.to_pdf(FIXTURES / "rich.pptx", work / "out.pdf")
+    finally:
+        engine.close()
+    assert time.monotonic() - started < 12.0, "it should not try again"
+
+
+@pytest.mark.parametrize("delay", [0.1, 0.8, 2.0])
+def test_closing_the_window_during_a_render_shows_no_message(ui, work, delay):
+    from james_viewer.ui.mainwindow import MainWindow
+
+    deck = _copy(work, "rich.pptx")
+    window = MainWindow()
+    window.show()
+    window.open_paths([str(deck)])
+    assert pump(30, lambda: bool(window.views))
+    pump(delay)
+    told_before = len(ui.told)
+    window.close()
+    pump(2.5)
+    assert len(ui.told) == told_before, ui.told[told_before:]
