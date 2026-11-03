@@ -1,6 +1,6 @@
 """Test the packaged James Viewer.exe from outside, the way Windows sees it.
 
-  blackbox.py <folder holding James Viewer.exe> <results folder> <deck.pptx> <doc.pdf> <drop.pdf> [notes.md]
+  blackbox.py <folder holding James Viewer.exe> <results folder> <deck.pptx> <doc.pdf> <drop.pdf> [notes.md] [long.pdf]
 
 Real key presses are sent only after confirming James Viewer has the foreground, so they cannot land in
 another application. Real mouse input is used once, for the drag-and-drop check.
@@ -24,7 +24,7 @@ kernel32 = ctypes.windll.kernel32
 user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
 user32.GetForegroundWindow.restype = wintypes.HWND
 EnumProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-VK_F11, VK_ESCAPE, VK_RIGHT, VK_LEFT, VK_MENU, VK_CONTROL = 0x7A, 0x1B, 0x27, 0x25, 0x12, 0x11
+VK_F11, VK_ESCAPE, VK_RIGHT, VK_LEFT, VK_MENU, VK_CONTROL, VK_L, VK_B = 0x7A, 0x1B, 0x27, 0x25, 0x12, 0x11, 0x4C, 0x42
 results: dict = {}
 
 
@@ -185,6 +185,113 @@ def wheel(notches: int, with_ctrl: bool) -> None:
         user32.keybd_event(VK_CONTROL, 0, 2, 0)
 
 
+def ctrl_key(key: int, pid: int) -> None:
+    user32.keybd_event(VK_CONTROL, 0, 0, 0)
+    time.sleep(0.03)
+    press(key, pid)
+    user32.keybd_event(VK_CONTROL, 0, 2, 0)
+
+
+def window_image(hwnd: int, path: Path | None = None):
+    """Only this window, so that another app changing on screen cannot affect a comparison."""
+    image = grab().crop(rect_of(hwnd))
+    if path:
+        image.save(path)
+    return image
+
+
+def client_corner(hwnd: int) -> tuple[int, int]:
+    point = wintypes.POINT(0, 0)
+    user32.ClientToScreen(hwnd, ctypes.byref(point))
+    return point.x, point.y
+
+
+def cpu_seconds(process: subprocess.Popen) -> float:
+    created, ended, kernel, user = (wintypes.FILETIME() for _ in range(4))
+    kernel32.GetProcessTimes(wintypes.HANDLE(int(process._handle)), ctypes.byref(created), ctypes.byref(ended), ctypes.byref(kernel), ctypes.byref(user))
+    return sum((value.dwHighDateTime << 32 | value.dwLowDateTime) / 1e7 for value in (kernel, user))
+
+
+def markdown_place_checks(pid: int, hwnd: int, out: Path) -> None:
+    """The reader's place survives hiding panels and going through full screen, with real keys."""
+    start = window_image(hwnd, out / "20-md-before-panels.png")
+    ctrl_key(VK_L, pid)
+    time.sleep(0.8)
+    hidden = window_image(hwnd, out / "21-md-layout-hidden.png")
+    check("real Ctrl + L hides the layout", difference(start, hidden) > 1.0, round(difference(start, hidden), 2))
+    ctrl_key(VK_L, pid)
+    time.sleep(0.8)
+    back = window_image(hwnd)
+    check("hiding and showing the layout keeps the place", difference(start, back) < 1.0, round(difference(start, back), 3))
+
+    ctrl_key(VK_B, pid)
+    time.sleep(0.8)
+    no_panel = grab(out / "22-md-control-panel-hidden.png")
+    x, y = client_corner(hwnd)
+    corner = no_panel.crop((x, y, x + 150, y + 110))
+    green = sum(1 for red, green_value, blue in corner.getdata() if green_value > red + 15 and green_value > blue + 10)
+    check("the app icon stays at the top left without the control panel", green > 200, f"{green} green pixels")
+    ctrl_key(VK_B, pid)
+    time.sleep(0.8)
+    back = window_image(hwnd)
+    check("hiding and showing the control panel keeps the place", difference(start, back) < 1.0, round(difference(start, back), 3))
+
+    press(VK_F11, pid)
+    time.sleep(1.5)
+    press(VK_ESCAPE, pid)
+    time.sleep(1.0)
+    back = window_image(hwnd)
+    check("entering and leaving full screen keeps the place", difference(start, back) < 1.0, round(difference(start, back), 3))
+    press(VK_F11, pid)
+    time.sleep(1.5)
+    wheel(-8, with_ctrl=False)
+    time.sleep(0.6)
+    press(VK_ESCAPE, pid)
+    time.sleep(1.0)
+    moved = window_image(hwnd, out / "23-md-after-full-screen-scroll.png")
+    check("scrolling in full screen carries back to the window", difference(start, moved) > 1.0, round(difference(start, moved), 2))
+
+
+def long_pdf_checks(exe: Path, data: Path, out: Path, pdf: str) -> None:
+    """A long PDF once blinked for ever after paging through it. It must come to rest."""
+    process = launch(exe, data, pdf)
+    pid = process.pid
+    opened = wait(lambda: any(Path(pdf).name in title_of(h) for h in windows_of(pid)), 40)
+    check("the long PDF opens", opened)
+    time.sleep(2.0)
+    hwnd = next(h for h in windows_of(pid) if Path(pdf).name in title_of(h))
+    if not bring_forward(hwnd):
+        check("James Viewer reached the foreground for the long PDF", False)
+        user32.PostMessageW(hwnd, 0x0010, 0, 0)
+        return
+    keep = wintypes.POINT()
+    user32.GetCursorPos(ctypes.byref(keep))
+    left, top, right, bottom = rect_of(hwnd)
+    user32.SetCursorPos((left + right) // 2 + 300, (top + bottom) // 2)
+    time.sleep(0.2)
+    for _ in range(200):
+        press(VK_RIGHT, pid)
+        time.sleep(0.02)
+    for _ in range(80):
+        press(VK_LEFT, pid)
+        time.sleep(0.02)
+    time.sleep(2.5)
+    frames = [window_image(hwnd, out / "30-long-pdf-at-rest.png")]
+    before = cpu_seconds(process)
+    for _ in range(12):
+        time.sleep(0.25)
+        frames.append(window_image(hwnd))
+    used = cpu_seconds(process) - before
+    worst = max(difference(frames[0], frame) for frame in frames)
+    check("the long PDF stops changing after paging", worst < 0.01, round(worst, 4))
+    check("the long PDF uses almost no CPU at rest", used < 0.3, f"{used:.2f}s over 3s")
+    darkest = frames[0].convert("L").crop((frames[0].width // 2, frames[0].height // 4, frames[0].width * 9 // 10, frames[0].height * 3 // 4)).getextrema()[0]
+    check("the page on screen has content, not a blank sheet", darkest < 120, darkest)
+    user32.SetCursorPos(keep.x, keep.y)
+    user32.PostMessageW(hwnd, 0x0010, 0, 0)
+    process.wait(20)
+
+
 def markdown_checks(exe: Path, data: Path, out: Path, markdown: str, folder: Path) -> None:
     import hashlib
 
@@ -229,6 +336,7 @@ def markdown_checks(exe: Path, data: Path, out: Path, markdown: str, folder: Pat
     time.sleep(0.5)
     scrolled = grab(out / "13-md-scrolled.png")
     check("real plain wheel scrolls", difference(back, scrolled) > 1.0, round(difference(back, scrolled), 2))
+    markdown_place_checks(pid, hwnd, out)
 
     width, height = screen_size()
     press(VK_F11, pid)
@@ -381,8 +489,10 @@ def main() -> int:
 
     if len(sys.argv) > 6:
         markdown_checks(exe, data, out, str(Path(sys.argv[6]).resolve()), folder)
+    if len(sys.argv) > 7:
+        long_pdf_checks(exe, data, out, str(Path(sys.argv[7]).resolve()))
 
-    sessions = list((data / "sessions").glob("*")) if (data / "sessions").exists() else []
+    sessions =list((data / "sessions").glob("*")) if (data / "sessions").exists() else []
     check("temporary session files removed", not sessions, [p.name for p in sessions])
     (out / "results.json").write_text(json.dumps(results, indent=1), encoding="utf-8")
     failed = [name for name, value in results.items() if isinstance(value, dict) and value.get("passed") is False]

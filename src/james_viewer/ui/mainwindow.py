@@ -28,9 +28,12 @@ from .pages import HomePage, ProtectionPage, SplitMergePage
 from .presenter import Presenter
 from .services import Workspace
 
+SIDEBAR_WIDTH = 232
+
 HELP_TEXT = """
 <table cellpadding="4">
 <tr><td><b>F11</b></td><td>Full screen, Esc to leave</td></tr>
+<tr><td><b>Ctrl + B</b></td><td>Show or hide the control panel</td></tr>
 <tr><td><b>Ctrl + L</b></td><td>Show or hide the document layout</td></tr>
 <tr><td><b>← → ↑ ↓, Page Up/Down, Space</b></td><td>Previous and next</td></tr>
 <tr><td><b>Home, End</b></td><td>First and last</td></tr>
@@ -88,6 +91,7 @@ class MainWindow(QMainWindow):
 
         self._install_shortcuts()
         self._load_recent()
+        self._show_control_panel(self._load_settings().get("control_panel", True) is not False)
         self.split_merge.set_document(None, None)
         self._idle_timer = QTimer(self)
         self._idle_timer.setInterval(60_000)
@@ -99,8 +103,9 @@ class MainWindow(QMainWindow):
 
     def _build_sidebar(self) -> QWidget:
         bar = QFrame()
+        self.sidebar = bar
         bar.setObjectName("Sidebar")
-        bar.setFixedWidth(232)
+        bar.setFixedWidth(SIDEBAR_WIDTH)
         layout = QVBoxLayout(bar)
         layout.setContentsMargins(18, 26, 18, 18)
         layout.setSpacing(0)
@@ -191,6 +196,13 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout(bar)
         row.setContentsMargins(18, 0, 16, 0)
         row.setSpacing(6)
+        self.corner_mark = widgets.BrandMark(36)
+        self.corner_mark.setToolTip(APP_NAME)
+        row.addWidget(self.corner_mark)
+        self.panel_toggle = widgets.tool_button("panel", "Show or hide the control panel (Ctrl+B)", checkable=True)
+        self.panel_toggle.clicked.connect(self.set_control_panel)
+        row.addWidget(self.panel_toggle)
+        row.addSpacing(8)
         self.tabs = QTabBar()
         self.tabs.setMovable(True)
         self.tabs.setExpanding(False)
@@ -217,6 +229,7 @@ class MainWindow(QMainWindow):
         bind(QKeySequence.StandardKey.SaveAs, self.save_as)
         bind(Qt.Key.Key_F11, self.present)
         bind(Qt.Key.Key_F1, self.show_help)
+        bind("Ctrl+B", lambda: self.set_control_panel(not self.sidebar.isVisibleTo(self)))
         bind("Ctrl+L", self.toggle_layout)
         bind("Ctrl+W", lambda: self.close_tab(self.tabs.currentIndex()) if self.tabs.count() else None)
         bind("Ctrl+Tab", self._next_tab)
@@ -432,7 +445,7 @@ class MainWindow(QMainWindow):
         if self.presenter is not None:
             return
         if isinstance(view, MarkdownTab):
-            self.presenter = MarkdownPresenter(view.document, view.canvas.zoom, view.canvas.scroll_fraction(), view.canvas.wheel_zooms)
+            self.presenter = MarkdownPresenter(view.document, view.canvas.zoom, view.canvas.place(), view.canvas.wheel_zooms)
             self.presenter.finished.connect(self._markdown_presenter_closed)
         else:
             self.presenter = Presenter(view.document)
@@ -447,15 +460,24 @@ class MainWindow(QMainWindow):
             view.focus_page()
         self.activateWindow()
 
-    def _markdown_presenter_closed(self, zoom: float, fraction: float) -> None:
+    def _markdown_presenter_closed(self, zoom: float, place: tuple[int, int]) -> None:
         self.presenter = None
         view = self.current_view()
         if isinstance(view, MarkdownTab):
-            view.canvas.set_zoom(zoom)
-            view.canvas.render()
-            view.canvas.set_scroll_fraction(fraction)
+            view.canvas.return_to(zoom, place)
             view.focus_page()
         self.activateWindow()
+
+    def _show_control_panel(self, visible: bool) -> None:
+        """While the left panel is hidden, the app's icon stays at the top left."""
+        self.sidebar.setVisible(visible)
+        self.corner_mark.setVisible(not visible)
+        self.panel_toggle.setChecked(visible)
+        self.toast.left_inset = SIDEBAR_WIDTH if visible else 0
+
+    def set_control_panel(self, visible: bool) -> None:
+        self._show_control_panel(visible)
+        self._save_settings(control_panel=visible)
 
     def toggle_layout(self) -> None:
         """Show or hide the thumbnails or the Markdown outline."""
@@ -706,7 +728,20 @@ class MainWindow(QMainWindow):
                 self._run_merge(inputs, out_path)
                 return
 
-    # -- recent files ------------------------------------------------------------------------------
+    # -- settings and recent files ------------------------------------------------------------------
+
+    def _load_settings(self) -> dict:
+        try:
+            values = json.loads((paths.data_dir() / "settings.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return values if isinstance(values, dict) else {}
+
+    def _save_settings(self, **changes) -> None:
+        try:
+            (paths.data_dir() / "settings.json").write_text(json.dumps({**self._load_settings(), **changes}), encoding="utf-8")
+        except OSError:
+            pass
 
     def _recent_path(self) -> Path:
         return paths.data_dir() / "recent.json"

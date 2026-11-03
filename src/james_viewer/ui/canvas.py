@@ -114,8 +114,10 @@ class PageCanvas(QAbstractScrollArea):
 
     # -- painting ------------------------------------------------------------------------------------
 
-    def _image_ready(self, _key) -> None:
-        self.viewport().update()
+    def _image_ready(self, key) -> None:
+        ref = self.document.ref_at(self.document.current) if self.document.pages else None
+        if ref is not None and (key[0], key[1]) == (ref.pdf, ref.page):
+            self.viewport().update()
 
     def paintEvent(self, _event) -> None:
         painter = QPainter(self.viewport())
@@ -150,7 +152,7 @@ class PageCanvas(QAbstractScrollArea):
         else:
             ratio = self.devicePixelRatioF()
             width_px, height_px = round(rect.width() * ratio), round(rect.height() * ratio)
-            pixmap = self.document.workspace.images.get(ref, width_px, height_px, priority=1)
+            pixmap = self.document.workspace.images.get(ref, width_px, height_px, priority=1, on_screen=True)
             if pixmap is None:
                 pixmap = self.document.workspace.images.peek_any(ref)
             if pixmap is not None:
@@ -284,7 +286,8 @@ class PageCanvas(QAbstractScrollArea):
         if point is None or text is None:
             return -1
         with PDFIUM_LOCK:
-            return text.get_index(point[0], point[1], 12, 12)
+            index = text.get_index(point[0], point[1], 12, 12)
+        return -1 if index is None else index
 
     def _over_text(self, position: QPointF) -> bool:
         point = self._page_point(position)
@@ -292,7 +295,8 @@ class PageCanvas(QAbstractScrollArea):
         if point is None or text is None:
             return False
         with PDFIUM_LOCK:
-            return text.get_index(point[0], point[1], 2, 2) >= 0
+            index = text.get_index(point[0], point[1], 2, 2)
+        return index is not None and index >= 0
 
     def _select(self, start: int, end: int) -> None:
         text = self._ensure_text()

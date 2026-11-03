@@ -18,6 +18,9 @@ from ..core.office_engine import OfficeEngine
 from ..core.paths import Session
 from ..core.pdf_engine import PdfiumDocuments
 
+# About 144 MB a page, so one page at high zoom cannot push everything else out of the cache.
+MAX_RENDER_PIXELS = 36_000_000
+
 
 @dataclass(frozen=True)
 class RenderRef:
@@ -54,7 +57,7 @@ class _Task(QRunnable):
 
 
 class ImageService(QThread):
-    """Renders pages on one thread, always the most urgent request first."""
+    """Renders pages on one thread: the most urgent first, then the most recently asked for."""
 
     rendered = Signal(object, QImage)
     failed = Signal(object)
@@ -64,6 +67,7 @@ class ImageService(QThread):
         self.pdfium = pdfium
         self._heap: list = []
         self._priority: dict[tuple, int] = {}
+        self._in_flight: set[tuple] = set()
         self._counter = itertools.count()
         self._wake = threading.Condition()
         self._stopping = False
@@ -71,12 +75,19 @@ class ImageService(QThread):
     def request(self, ref: RenderRef, width_px: int, height_px: int, priority: int) -> None:
         key = (ref.pdf, ref.page, width_px, height_px)
         with self._wake:
+            if key in self._in_flight:
+                return
             current = self._priority.get(key)
             if current is not None and current <= priority:
                 return
             self._priority[key] = priority
-            heapq.heappush(self._heap, (priority, next(self._counter), key, ref))
+            heapq.heappush(self._heap, (priority, -next(self._counter), key, ref))
             self._wake.notify()
+
+    def finished(self, key: tuple) -> None:
+        """The result reached the cache, or the render failed, so it may be asked for again."""
+        with self._wake:
+            self._in_flight.discard(key)
 
     def drop_below(self, priority_floor: int) -> None:
         """Forget queued work that is less urgent than the floor, such as off-screen thumbnails."""
@@ -102,6 +113,7 @@ class ImageService(QThread):
                 if self._priority.get(key) != priority:
                     continue
                 del self._priority[key]
+                self._in_flight.add(key)
             try:
                 data, width, height, stride, channels = self.pdfium.render(
                     ref.pdf, ref.password, ref.page, key[2], key[3]
@@ -111,7 +123,12 @@ class ImageService(QThread):
                 self.rendered.emit(key, image)
             except Exception as exc:
                 traceback.print_exc()
+                self.finished(key)
                 self.failed.emit((key, str(exc)))
+
+
+def _bytes_of(pixmap: QPixmap) -> int:
+    return pixmap.width() * pixmap.height() * 4
 
 
 class ImageCache(QObject):
@@ -125,18 +142,26 @@ class ImageCache(QObject):
         self.limit = limit_bytes
         self.used = 0
         self._items: OrderedDict[tuple, QPixmap] = OrderedDict()
+        self._on_screen: tuple | None = None
         service.rendered.connect(self._store)
 
     def key(self, ref: RenderRef, width_px: int, height_px: int) -> tuple:
+        pixels = width_px * height_px
+        if pixels > MAX_RENDER_PIXELS:
+            shrink = (MAX_RENDER_PIXELS / pixels) ** 0.5
+            width_px, height_px = int(width_px * shrink), int(height_px * shrink)
         return (ref.pdf, ref.page, width_px, height_px)
 
-    def get(self, ref: RenderRef, width_px: int, height_px: int, priority: int = 5) -> QPixmap | None:
+    def get(self, ref: RenderRef, width_px: int, height_px: int, priority: int = 5, on_screen: bool = False) -> QPixmap | None:
+        """The page at this size, or None after asking for it. The on-screen page is never evicted."""
         key = self.key(ref, width_px, height_px)
+        if on_screen:
+            self._on_screen = key
         pixmap = self._items.get(key)
         if pixmap is not None:
             self._items.move_to_end(key)
             return pixmap
-        self.service.request(ref, width_px, height_px, priority)
+        self.service.request(ref, key[2], key[3], priority)
         return None
 
     def peek_any(self, ref: RenderRef) -> QPixmap | None:
@@ -148,12 +173,18 @@ class ImageCache(QObject):
         return best
 
     def _store(self, key: tuple, image: QImage) -> None:
+        self.service.finished(key)
         pixmap = QPixmap.fromImage(image)
+        replaced = self._items.pop(key, None)
+        if replaced is not None:
+            self.used -= _bytes_of(replaced)
         self._items[key] = pixmap
-        self.used += pixmap.width() * pixmap.height() * 4
-        while self.used > self.limit and len(self._items) > 1:
-            _old_key, old = self._items.popitem(last=False)
-            self.used -= old.width() * old.height() * 4
+        self.used += _bytes_of(pixmap)
+        for old_key in list(self._items):
+            if self.used <= self.limit:
+                break
+            if old_key not in (key, self._on_screen):
+                self.used -= _bytes_of(self._items.pop(old_key))
         self.available.emit(key)
 
 

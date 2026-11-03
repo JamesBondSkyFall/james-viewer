@@ -1,18 +1,40 @@
-# James Viewer 1.0.0: test report
+# James Viewer 1.1.0: test report
 
 Tested on Windows 11 x64, 16 GB RAM, 2880×1800 at 200% scaling.
 
 ## Status
 
-**All tests pass on the final build.** The limits that remain are listed under [Not supported or not done](#not-supported-or-not-done).
+**All automated tests and all real-input checks pass on the x64 package of 1.1.0, and it passes its self-check.** The ARM64 package has never been run. The limits that remain are listed under [Not supported or not done](#not-supported-or-not-done).
+
+## Fixed in 1.1.0
+
+- **Long PDFs blinked and showed blank pages, using about 1.5 CPU cores non-stop.** The image cache counted a page twice when it was rendered twice, until it believed it was full and kept pushing out what was on screen. Measured on a copy of a 709-page book after paging through it: 787 renders in 4 idle seconds before, 0 after, and the picture no longer changes. Very high zoom could cause the same loop, so a page is now rendered at no more than 36 million pixels.
+- **Moving the mouse over blank paper in a PDF raised a hidden error**, and dragging from blank paper could not select text.
+- **Markdown lost the reader's place** when hiding the layout (section 66 jumped to section 118, the last), when resizing the window, and when entering or leaving full screen. The place is now held as a character in the document, not as a share of the scroll range.
 
 ## Automated tests
 
-155 of 155 pass, driving the real window on the trimmed office bundle, on an unlocked PC.
+172 of 172 pass, driving the real window on the trimmed office bundle, on an unlocked PC.
+
+## ARM64 package
+
+Built on this x64 PC by `tools/build_arm64.py`, because PyInstaller cannot build for another processor. **It has not been run on an ARM64 PC.** Windows here refuses to start it, with error 216, as it should. What has been checked:
+
+- All 275 native files that can be loaded are ARM64, and all their imports resolve to the package or to Windows. The checks only read the files, so they cannot show that the code behaves correctly.
+- The same build steps with x64 parts give an exe that runs here and passes 6 of 6 self-checks, including PowerPoint rendering. That also tests cryptography 46.0.3, the version ARM64 has to use.
+- The trim list for the office engine was verified on x64 only. LibreOffice's ARM64 build has the same build id, and 56 extra separate libraries were kept rather than removed untested. That is why the package is larger: 528 MB unpacked, 172 MB zip.
+
+`Self-check.cmd` in the package tests each part on the target PC and saves a report on the Desktop.
 
 ## Packaged exe with real input
 
-29 of 29 checks pass on the final build, unzipped from the portable zip into a separate folder, using real key presses and real mouse input:
+39 of 39 checks pass on the x64 package of 1.1.0, unzipped from the portable zip into a separate folder, using real key presses and real mouse input. Ten checks are new in 1.1.0:
+
+- **Keeping your place in Markdown:** hiding and showing the layout, hiding and showing the control panel, and entering and leaving full screen each return to a pixel-identical view (difference 0.0). Scrolling in full screen carries back to the window.
+- **Control panel:** the app icon stays at the top left while the panel is hidden.
+- **Long PDF, a copy of the 709-page book:** after 280 real page turns, the window stops changing (difference 0.0), uses 0.00 s of CPU over 3 s, and shows a page with content. This shows the app at rest. It does not by itself prove the old loop is gone, because 280 turns may not reach it. The comparison under [Fixed in 1.1.0](#fixed-in-110) does that.
+
+The checks carried over from 1.0.0:
 
 - **F11, PowerPoint:** the window covers the whole 2880×1800 monitor, with no title bar or border. The black bands are pure black, so no taskbar or toolbar shows. The cursor is hidden. Right and Left arrows change slides and return to an identical image. Esc returns to the main window.
 - **Real drag and drop** from another window opens the file.
@@ -24,6 +46,8 @@ Real-input testing found two bugs the other tests could not, both now fixed: the
 Moving the mouse in full screen shows the pointer until it has rested for 1.5 seconds.
 
 ## Packaged exe, measured from a separate folder
+
+Measured on 1.0.0, except that the real-input run on 1.1.0 timed startup at 0.99 s at best, while this PC was also busy with other work. Only the startup row was measured again.
 
 | Measure | Result |
 |---|---|
@@ -85,7 +109,9 @@ Three problems found by comparing and fixed: false line breaks in no-wrap text, 
 
 ## Not supported or not done
 
+- **The ARM64 package has not been run.** See [ARM64 package](#arm64-package).
 - **PPS, PPSX and ODP are not supported yet**, deferred as you asked.
+- At very high zoom, PDF and slide pages can look slightly soft, from about 430% on a Letter page at 200% display scaling.
 - **Not tested on a PC without Microsoft Office** or without the Visual C++ runtime. The app does not use Office, and it bundles the runtime, but this PC has Office installed, so neither is proven.
 - **No installer.** The portable zip is the delivery.
 - **Multiple monitors not tested.** Only one is attached.

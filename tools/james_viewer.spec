@@ -26,6 +26,7 @@ DATAS = [
 HIDDEN = [
     "james_viewer.core.office_engine",
     "james_viewer.ui.mainwindow",
+    "james_viewer.selfcheck",
     "PySide6.QtSvg",
     *collect_submodules("pygments.lexers"),
     *collect_submodules("pygments.formatters"),
@@ -34,6 +35,7 @@ HIDDEN = [
     *collect_submodules("markdown_it"),
 ]
 
+# The ARM64 package reuses this analysis under another virtual environment and folder.
 analysis = Analysis(
     [str(root / "src" / "james_viewer" / "__main__.py")],
     pathex=[str(root / "src")],

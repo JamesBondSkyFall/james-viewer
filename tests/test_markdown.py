@@ -596,3 +596,139 @@ def test_real_notes_render_completely_and_stay_unchanged(ui):
     assert "image file not found" not in page.template
     assert not [note for note in page.notes if note.important]
     assert sha256(REAL_FILE) == before
+
+
+# -- keeping the reader's place ---------------------------------------------------------------------
+
+
+def _long_notes(work: Path) -> Path:
+    out = work / "long.md"
+    paragraphs = [f"## 第 {n} 节 Section {n}\n\n" + f"段落 {n} paragraph {n}. " * 40 + "\n" for n in range(120)]
+    out.write_text("# Long\n\n" + "\n".join(paragraphs), encoding="utf-8")
+    return out
+
+
+def _top_text(reader: MarkdownReader) -> tuple[int, str]:
+    cursor = reader.browser.cursorForPosition(QPoint(reader.browser.viewport().width() // 2, 4))
+    return cursor.position(), cursor.block().text()[:24]
+
+
+def _scroll_to(reader: MarkdownReader, fraction: float) -> None:
+    bar = reader.browser.verticalScrollBar()
+    bar.setValue(round(bar.maximum() * fraction))
+    pump(0.05)
+
+
+def _assert_same_place(reader: MarkdownReader, before: tuple[int, str]) -> None:
+    pump(0.5)
+    position, text = _top_text(reader)
+    total = reader.browser.document().characterCount()
+    assert abs(position - before[0]) < total * 0.01, f"moved from {before} to {(position, text)} of {total}"
+
+
+def _reader_ready(ui, work) -> tuple:
+    view = ui.open(_long_notes(work))
+    reader = _reader(view)
+    _settle(reader)
+    ui.window.set_control_panel(True)
+    pump(0.4)
+    return view, reader
+
+
+@pytest.mark.parametrize("fraction", [0.0, 0.2, 0.55, 0.9])
+def test_hiding_and_showing_the_layout_keeps_the_place(ui, work, fraction):
+    view, reader = _reader_ready(ui, work)
+    ui.window.resize(1040, 700)  # narrow enough that the width of the text really changes
+    pump(0.4)
+    _scroll_to(reader, fraction)
+    before = _top_text(reader)
+    view.layout_toggle.click()
+    _assert_same_place(reader, before)
+    assert reader.browser.verticalScrollBar().value() < reader.browser.verticalScrollBar().maximum() or fraction > 0.8
+    view.layout_toggle.click()
+    _assert_same_place(reader, before)
+    ui.window.resize(1400, 880)
+
+
+@pytest.mark.parametrize("fraction", [0.2, 0.55])
+def test_hiding_the_control_panel_keeps_the_place(ui, work, fraction):
+    view, reader = _reader_ready(ui, work)
+    ui.window.resize(1040, 700)
+    pump(0.4)
+    _scroll_to(reader, fraction)
+    before = _top_text(reader)
+    ui.window.set_control_panel(False)
+    _assert_same_place(reader, before)
+    ui.window.set_control_panel(True)
+    _assert_same_place(reader, before)
+    ui.window.resize(1400, 880)
+
+
+def test_resizing_the_window_keeps_the_place(ui, work):
+    view, reader = _reader_ready(ui, work)
+    ui.window.resize(1400, 880)
+    pump(0.4)
+    _scroll_to(reader, 0.5)
+    before = _top_text(reader)
+    for width in (1300, 1200, 1100, 1040):
+        ui.window.resize(width, 760)
+        pump(0.02)
+    _assert_same_place(reader, before)
+    ui.window.resize(1400, 880)
+
+
+@pytest.mark.parametrize("zoomed", [False, True])
+def test_leaving_full_screen_stays_where_full_screen_was(ui, work, zoomed):
+    view, reader = _reader_ready(ui, work)
+    _scroll_to(reader, 0.2)
+    _enter(ui.window)
+    presenter = ui.window.presenter
+    pump(0.4)
+    _scroll_to(presenter.reader, 0.7)
+    if zoomed:
+        presenter.reader.set_zoom(1.3)
+        pump(0.3)
+    inside = _top_text(presenter.reader)
+    QTest.keyClick(presenter.reader.browser, Qt.Key.Key_Escape)
+    pump(0.5)
+    assert ui.window.presenter is None
+    position, _text = _top_text(reader)
+    total = reader.browser.document().characterCount()
+    assert abs(position - inside[0]) < total * 0.02, f"full screen was at {inside}, the window at {position} of {total}"
+    if zoomed:
+        reader.set_zoom(1.0)
+        pump(0.3)
+
+
+def test_entering_full_screen_starts_at_the_same_place(ui, work):
+    view, reader = _reader_ready(ui, work)
+    _scroll_to(reader, 0.6)
+    before = _top_text(reader)
+    _enter(ui.window)
+    presenter = ui.window.presenter
+    pump(0.4)
+    position, _text = _top_text(presenter.reader)
+    total = reader.browser.document().characterCount()
+    assert abs(position - before[0]) < total * 0.02, f"window at {before}, full screen at {position} of {total}"
+    QTest.keyClick(presenter.reader.browser, Qt.Key.Key_Escape)
+    pump(0.3)
+
+
+def test_the_real_note_keeps_its_place_through_layout_and_full_screen(ui):
+    if not REAL_FILE.exists():
+        pytest.skip("the real note is not on this PC")
+    before_hash = sha256(REAL_FILE)
+    view = ui.open(REAL_FILE)
+    reader = _reader(view)
+    _settle(reader)
+    ui.window.resize(1040, 700)
+    pump(0.4)
+    _scroll_to(reader, 0.5)
+    place = _top_text(reader)
+    view.layout_toggle.click()
+    _assert_same_place(reader, place)
+    view.layout_toggle.click()
+    _assert_same_place(reader, place)
+    ui.window.resize(1400, 880)
+    pump(0.4)
+    assert sha256(REAL_FILE) == before_hash

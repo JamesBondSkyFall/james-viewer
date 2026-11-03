@@ -172,11 +172,12 @@ class MarkdownReader(QWidget):
         if full_screen:
             self.browser.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._rendered_width = -1
+        self._rendered_zoom = 0.0
         self._heading_tops: list[tuple[int, str]] = []
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(70)
-        self._timer.timeout.connect(self.render)
+        self._timer.timeout.connect(self._refresh)
         self.selection_available = False
         self.browser.copyAvailable.connect(self._note_selection)
         self._fill_natural_sizes()
@@ -262,9 +263,19 @@ class MarkdownReader(QWidget):
         self.browser.setViewportMargins(side, int(paper.top()), right, 0)
 
     def _place_browser(self) -> None:
+        shown = self._rendered_width > 0
+        waiting = self._anchor is not None
+        if shown:  # the browser still has its old size here, so this is still the reader's real place
+            self._remember_anchor(QPoint(self.browser.viewport().width() // 2, 0))
         self.browser.setGeometry(self.rect())
         self._place_browser_margins()
-        if self._content_width() != self._rendered_width:
+        if self._content_width() == self._rendered_width:
+            if not waiting:
+                self._anchor = None
+        elif shown and not self._timer.isActive():
+            self.render()  # at once, so a single change such as hiding a panel shows no jump
+            self._timer.start()  # the later steps of dragging the window's edge come together
+        else:
             self._timer.start()
         self.update()
 
@@ -374,15 +385,22 @@ class MarkdownReader(QWidget):
         hr {{ margin: {px(0.6)} 0; color: {theme.LINE}; }}
         """
 
+    def _refresh(self) -> None:
+        if (self._content_width(), self.zoom) != (self._rendered_width, self._rendered_zoom):
+            self.render()
+        else:
+            self._anchor = None
+
     def render(self) -> None:
-        self._place_browser_margins()
-        bar = self.browser.verticalScrollBar()
-        fraction = bar.value() / bar.maximum() if bar.maximum() > 0 else 0.0
         anchor, self._anchor = self._anchor, None
+        if anchor is None and self._rendered_width > 0:
+            anchor = self.place()
+        self._place_browser_margins()
         document = self.browser.document()
         ratio = self.devicePixelRatioF()
         width = self._content_width()
         self._rendered_width = width
+        self._rendered_zoom = self.zoom
         margin = max(12, 28 * self.zoom)
         limit = max(120.0, width - margin * 2 - 8)
         body = _ASSET_MARK.sub(lambda match: self._expand(match, ratio, limit), self.page.template)
@@ -406,14 +424,10 @@ class MarkdownReader(QWidget):
             document.setDefaultFont(font)
             document.setDocumentMargin(margin)
             self.browser.setHtml(f"<html><head><style>{self._style_sheet(self.zoom)}</style></head><body>{body}</body></html>")
-            document.size()  # finishes the layout, so the scroll range below is the real one
             if anchor is not None:
-                cursor = QTextCursor(document)
-                cursor.setPosition(min(anchor[0], document.characterCount() - 1))
-                bar.setValue(bar.value() + self.browser.cursorRect(cursor).top() - anchor[1])
-                self._held, self._held_scroll = anchor, bar.value()
-            elif bar.maximum() > 0:
-                bar.setValue(round(fraction * bar.maximum()))
+                self.go_to_place(anchor)
+            else:
+                self._finish_layout()
         finally:
             self.browser.setUpdatesEnabled(True)
         self._heading_tops = []
@@ -454,13 +468,33 @@ class MarkdownReader(QWidget):
     def go_to_heading(self, anchor: str) -> None:
         self.browser.scrollToAnchor(anchor)
 
-    def scroll_fraction(self) -> float:
-        bar = self.browser.verticalScrollBar()
-        return bar.value() / bar.maximum() if bar.maximum() > 0 else 0.0
+    def _finish_layout(self) -> None:
+        """Qt lays out a long document only down to the view, and until then the scroll range ends there."""
+        document = self.browser.document()
+        document.documentLayout().documentSizeChanged.emit(document.size())
 
-    def set_scroll_fraction(self, fraction: float) -> None:
+    def place(self) -> tuple[int, int]:
+        """The reader's place: the character at the top of the view and its height there. A character
+        stays the same at any width or zoom, unlike a share of the scroll range."""
+        cursor = self.browser.cursorForPosition(QPoint(self.browser.viewport().width() // 2, 0))
+        return cursor.position(), self.browser.cursorRect(cursor).top()
+
+    def go_to_place(self, place: tuple[int, int]) -> None:
+        self._finish_layout()
+        document = self.browser.document()
         bar = self.browser.verticalScrollBar()
-        bar.setValue(round(fraction * bar.maximum()))
+        cursor = QTextCursor(document)
+        cursor.setPosition(min(place[0], document.characterCount() - 1))
+        bar.setValue(bar.value() + self.browser.cursorRect(cursor).top() - place[1])
+        self._held, self._held_scroll = place, bar.value()
+
+    def return_to(self, zoom: float, place: tuple[int, int]) -> None:
+        """Take over the zoom and place from the full-screen reader."""
+        self.set_zoom(zoom)
+        self._timer.stop()
+        self._anchor = None
+        self._refresh()
+        self.go_to_place(place)
 
     def _link_clicked(self, url: QUrl) -> None:
         if url.scheme() in ("http", "https", "mailto"):
@@ -650,14 +684,14 @@ class MarkdownTab(QWidget):
 class MarkdownPresenter(QWidget):
     """Markdown in true full screen: only the document, until Esc or F11."""
 
-    finished = Signal(float, float)
+    finished = Signal(float, object)
 
-    def __init__(self, document: MarkdownDocument, zoom: float, fraction: float, wheel_zooms: bool = False, show_layout: bool = False):
+    def __init__(self, document: MarkdownDocument, zoom: float, place: tuple[int, int], wheel_zooms: bool = False, show_layout: bool = False):
         super().__init__(None, Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowTitle(f"{document.name} - James Viewer")
         self.document = document
-        self._fraction = fraction
+        self._place = place
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(0)
@@ -681,7 +715,7 @@ class MarkdownPresenter(QWidget):
         self.raise_()
         self.activateWindow()
         self.reader.render()
-        self.reader.set_scroll_fraction(self._fraction)
+        self.reader.go_to_place(self._place)
         self.reader.browser.setFocus()
         self.cursor_hider.hide()
 
@@ -714,7 +748,7 @@ class MarkdownPresenter(QWidget):
 
     def closeEvent(self, event) -> None:
         self.cursor_hider.release()
-        self.finished.emit(self.reader.zoom, self.reader.scroll_fraction())
+        self.finished.emit(self.reader.zoom, self.reader.place())
         super().closeEvent(event)
 
 

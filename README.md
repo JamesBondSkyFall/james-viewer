@@ -1,17 +1,22 @@
 # James Viewer
 
-A small Windows x64 app for viewing PDF, PPT, PPTX and Markdown files, and for organising PDF and PowerPoint pages. It works fully offline, with no account, and needs neither Microsoft Office nor Adobe Acrobat.
+A small Windows app, for x64 and ARM64 PCs, for viewing PDF, PPT, PPTX and Markdown files, and for organising PDF and PowerPoint pages. It works fully offline, with no account, and needs neither Microsoft Office nor Adobe Acrobat.
 
 ## Getting started
 
-1. Unzip `James-Viewer-1.0.0-win-x64-portable.zip` anywhere, such as your Documents folder. Nothing is installed.
+1. Unzip the package for your PC anywhere, such as your Documents folder. Nothing is installed.
+   - Most PCs: `James-Viewer-1.1.0-win-x64-portable.zip`
+   - ARM64 PCs, such as the Surface Laptop 7: `James-Viewer-1.1.0-win-arm64-portable.zip`
 2. Run `James Viewer\James Viewer.exe`.
 3. Choose files, or drop them anywhere in the window.
 
 Keep the `James Viewer` folder together, because the exe needs the `_internal` and `office` folders beside it.
 
+To check that everything works on a PC, double-click `Self-check.cmd`. It tries each part using its own small test files, then saves a report named `James Viewer self-check.txt` on your Desktop. It opens none of your documents.
+
 ## Viewing
 
+- **Show or hide the control panel:** press **Ctrl + B** or click the panel button at the top left. While the panel is hidden, the app's icon stays in the corner and the document gets the extra room. James Viewer remembers your choice.
 - **Pages:** use the arrow keys, Page Up and Down, Space, the mouse wheel, or click a thumbnail.
 - **Zoom:** use Ctrl + wheel or the minus and plus buttons. For PDF and PowerPoint, click the zoom label for Fit to window, Fit to width or a fixed size.
 - **Show or hide the side panel:** press **Ctrl + L** or click the grid button in the toolbar. This shows or hides the thumbnails, or the document layout for Markdown.

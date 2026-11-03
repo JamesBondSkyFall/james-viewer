@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pikepdf
 import pytest
-from PySide6.QtCore import QEvent, QMimeData, QPointF, Qt, QUrl
+from PySide6.QtCore import QEvent, QMimeData, QPoint, QPointF, Qt, QUrl
 from PySide6.QtGui import QDropEvent, QGuiApplication, QKeySequence, QMouseEvent, QShortcut
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFileDialog
@@ -757,3 +757,144 @@ def test_pdf_reopens_from_cache_without_the_office_engine(ui, work):
 
 def test_pikepdf_is_available_for_checks():
     assert pikepdf.__version__
+
+
+# -- large documents and the control panel ----------------------------------------------------------
+
+
+def _long_pdf(work: Path, pages: int = 150) -> Path:
+    import pikepdf
+
+    out = work / "long.pdf"
+    with pikepdf.open(FIXTURES / "real-chinese.pdf") as source, pikepdf.new() as target:
+        for _ in range(pages):
+            target.pages.append(source.pages[0])
+        target.save(out)
+    return out
+
+
+def _count_renders(window, monkeypatch) -> list[int]:
+    counted = [0]
+    original = window.workspace.pdfium.render
+
+    def render(*arguments):
+        counted[0] += 1
+        return original(*arguments)
+
+    monkeypatch.setattr(window.workspace.pdfium, "render", render)
+    return counted
+
+
+def _settled_without_rendering(window, counted: list[int]) -> bool:
+    pump(1.5)
+    before = counted[0]
+    pump(1.5)
+    return counted[0] == before
+
+
+def test_paging_through_a_long_pdf_settles_and_keeps_the_page(ui, work, monkeypatch):
+    view = ui.open(_long_pdf(work))
+    window, document = ui.window, view.document
+    cache = window.workspace.images
+    monkeypatch.setattr(cache, "limit", 40 * 1024 * 1024)  # reaches the state a 709-page book reached, with fewer pages
+    counted = _count_renders(window, monkeypatch)
+    for position in range(0, 120):
+        view.go_to(position)
+        pump(0.02)
+        bar = view.rail.verticalScrollBar()
+        bar.setValue(bar.value() + 60)
+        pump(0.005)
+    assert _settled_without_rendering(window, counted)
+    real = sum(p.width() * p.height() * 4 for p in cache._items.values())
+    assert cache.used == real
+    assert len(cache._items) > 1
+    ref = document.ref_at(document.current)
+    rect = view.canvas._page_rect()
+    ratio = view.canvas.devicePixelRatioF()
+    assert cache.key(ref, round(rect.width() * ratio), round(rect.height() * ratio)) in cache._items
+
+
+def test_one_page_is_not_rendered_twice_at_once(ui, work, monkeypatch):
+    view = ui.open(_copy(work, "plain.pdf"))
+    window, document = ui.window, view.document
+    cache = window.workspace.images
+    pump(1)
+    counted = _count_renders(window, monkeypatch)
+    ref = document.ref_at(0)
+    for _ in range(50):
+        cache.get(ref, 777, 999, priority=1)
+    assert pump(5, lambda: cache.key(ref, 777, 999) in cache._items)
+    pump(0.3)
+    assert counted[0] == 1
+
+
+def test_extreme_zoom_settles_and_stays_within_the_cache(ui, work, monkeypatch):
+    view = ui.open(_copy(work, "plain.pdf"))
+    window, document = ui.window, view.document
+    cache = window.workspace.images
+    counted = _count_renders(window, monkeypatch)
+    view.canvas.set_zoom(8.0)
+    assert _settled_without_rendering(window, counted)
+    assert cache.used <= cache.limit
+    ref = document.ref_at(0)
+    rect = view.canvas._page_rect()
+    ratio = view.canvas.devicePixelRatioF()
+    key = cache.key(ref, round(rect.width() * ratio), round(rect.height() * ratio))
+    assert key in cache._items
+    assert key[2] * key[3] <= 36_000_000
+
+
+def test_control_panel_hides_and_leaves_the_icon_at_the_top_left(ui, work):
+    view = ui.open(_copy(work, "plain.pdf"))
+    window = ui.window
+    window.set_control_panel(True)
+    pump(0.1)
+    assert window.sidebar.isVisible() and not window.corner_mark.isVisible() and window.panel_toggle.isChecked()
+    wide_before = view.canvas.width()
+
+    QTest.mouseClick(window.panel_toggle, Qt.MouseButton.LeftButton)
+    pump(0.1)
+    assert not window.sidebar.isVisible()
+    assert window.corner_mark.isVisible() and not window.panel_toggle.isChecked()
+    corner = window.corner_mark.mapTo(window, QPoint(0, 0))
+    assert 0 <= corner.x() <= 30 and 0 <= corner.y() <= 30
+    assert view.canvas.width() == wide_before + window.sidebar.width()
+
+    QTest.mouseClick(window.panel_toggle, Qt.MouseButton.LeftButton)
+    pump(0.1)
+    assert window.sidebar.isVisible() and not window.corner_mark.isVisible()
+    assert view.canvas.width() == wide_before
+
+
+def test_control_panel_shortcut_and_remembered_state(ui, work):
+    from james_viewer.ui.mainwindow import MainWindow
+
+    view = ui.open(_copy(work, "plain.pdf"))
+    window = ui.window
+    window.set_control_panel(True)
+    window.activateWindow()
+    view.focus_page()
+    pump(0.2)
+    _key(view.canvas, Qt.Key.Key_B, Qt.KeyboardModifier.ControlModifier)
+    pump(0.1)
+    assert not window.sidebar.isVisible()
+    second = MainWindow()
+    second.show()
+    pump(0.1)
+    assert not second.sidebar.isVisible() and second.corner_mark.isVisible()
+    second.close()
+    window.set_control_panel(True)
+
+
+def test_moving_the_mouse_over_blank_paper_is_safe(ui, work):
+    view = ui.open(_copy(work, "plain.pdf"))
+    canvas = view.canvas
+    page = canvas._page_rect()
+    blank = QPointF(page.left() + 2, page.top() + 2)
+    assert canvas._char_index(blank) == -1
+    assert canvas._over_text(blank) is False
+    QTest.mouseMove(canvas.viewport(), blank.toPoint())
+    QTest.mousePress(canvas.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, blank.toPoint())
+    QTest.mouseMove(canvas.viewport(), blank.toPoint() + QPoint(6, 6))
+    QTest.mouseRelease(canvas.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, blank.toPoint() + QPoint(6, 6))
+    assert not canvas.has_selection

@@ -1,6 +1,8 @@
 """Build James Viewer.exe, add the office bundle, and create the portable zip.
 
   python tools/build_app.py
+
+The output goes to dist/<version>/, so a copy of an older version that is still running is left alone.
 """
 
 from __future__ import annotations
@@ -15,8 +17,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / ".build"
-DIST = ROOT / "dist"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
+DIST = ROOT / "dist" / VERSION / "x64"
 
 # Parts of the packaged Qt that James Viewer does not load.
 QT_REMOVE = [
@@ -66,9 +68,11 @@ def main() -> None:
     licenses = app / "licenses"
     licenses.mkdir(exist_ok=True)
     shutil.copyfile(ROOT / "docs" / "THIRD_PARTY.md", licenses / "THIRD_PARTY.md")
+    shutil.copyfile(ROOT / "tests" / "fixtures" / "rich.pptx", licenses / "self-check.pptx")
+    shutil.copyfile(ROOT / "tools" / "Self-check.cmd", app / "Self-check.cmd")
     print(f"app with office: {size_of(app) / 1e6:.0f} MB", flush=True)
 
-    archive = DIST / f"James-Viewer-{VERSION}-win-x64-portable.zip"
+    archive = DIST.parent / f"James-Viewer-{VERSION}-win-x64-portable.zip"
     started = time.perf_counter()
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as output:
         for item in sorted(app.rglob("*")):

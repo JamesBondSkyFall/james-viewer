@@ -150,6 +150,7 @@ class Toast(QLabel):
         self.setFont(theme.sans(13))
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.left_inset = 0
         self._effect = QGraphicsOpacityEffect(self)
         self.setGraphicsEffect(self._effect)
         self._animation = QPropertyAnimation(self._effect, b"opacity", self)
@@ -163,7 +164,7 @@ class Toast(QLabel):
         self.setText(QFontMetrics(self.font()).elidedText(text, Qt.TextElideMode.ElideMiddle, 760))
         self.adjustSize()
         parent = self.parentWidget()
-        self.move((parent.width() - self.width() + 232) // 2, parent.height() - self.height() - 28)
+        self.move((parent.width() - self.width() + self.left_inset) // 2, parent.height() - self.height() - 28)
         self.raise_()
         self.show()
         self._animation.stop()

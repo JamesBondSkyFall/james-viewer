@@ -5,6 +5,11 @@ import sys
 
 
 def main() -> int:
+    if "--self-check" in sys.argv:
+        from james_viewer import selfcheck
+
+        return selfcheck.run()
+
     from PySide6.QtCore import Qt, QTimer
     from PySide6.QtWidgets import QApplication
 

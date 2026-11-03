@@ -140,7 +140,7 @@ class Presenter(QWidget):
         pixmap = None
         if ref is not None:
             size = self._pixel_size(self.position)
-            pixmap = self.document.workspace.images.get(ref, size[0], size[1], priority=0)
+            pixmap = self.document.workspace.images.get(ref, size[0], size[1], priority=0, on_screen=True)
             if pixmap is None:
                 pixmap = self.document.workspace.images.peek_any(ref)
         if pixmap is not None:

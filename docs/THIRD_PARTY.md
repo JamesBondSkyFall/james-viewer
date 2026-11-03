@@ -17,4 +17,6 @@ James Viewer bundles these open-source components. All run locally, and none of 
 | Pygments | Colours code in Markdown | BSD-2-Clause |
 | Python 3.13 | Runtime | PSF-2.0 |
 
+The ARM64 package uses the official ARM64 build of each component. The one version difference is cryptography: ARM64 uses 46.0.3, the last release published for Windows ARM64, and x64 uses 50.0.2. On ARM64, the C++ runtime for the office engine comes from the Qt package, because the LibreOffice installer carries only its x86 and x64 copies.
+
 Source for LibreOffice is at https://www.libreoffice.org/download/source-code/, and for Qt at https://code.qt.io. To use a different build of Qt under the LGPL, replace the Qt DLLs in `_internal/PySide6`.
