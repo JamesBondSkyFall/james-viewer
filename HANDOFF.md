@@ -1,13 +1,13 @@
 # James Viewer: hand-over
 
-Branch `feature/windows-document-viewer`. Version 1.0.0 is commit `7054319`, 1.1.0 is `eb8d441`, and 1.1.1 is `1661407`. 1.2.0 (Word, PDF annotations, Markdown editing) is not committed yet. Commit only when the user asks. The current state and every known limit are in `docs/TEST_REPORT.md`.
+Branch `feature/windows-document-viewer`. Version 1.0.0 is commit `7054319`, 1.1.0 is `eb8d441`, and 1.1.1 is `1661407`. 1.2.0 (Word, PDF annotations, Markdown editing) is `11e9d58`, released as v1.2.0 with an x64 zip only. Commit only when the user asks. The current state and every known limit are in `docs/TEST_REPORT.md`.
 
 ## Built
 
 - `dist/1.2.0/x64/James Viewer/James Viewer.exe` and `dist/1.2.0/James-Viewer-1.2.0-win-x64-portable.zip`. No 1.2.0 ARM64 build: the user said to leave ARM64 until they ask.
 - `dist/1.1.1/x64/James Viewer/James Viewer.exe` and `dist/1.1.1/James-Viewer-1.1.1-win-x64-portable.zip`
 - `dist/1.1.1/arm64/James Viewer/James Viewer.exe` and `dist/1.1.1/James-Viewer-1.1.1-win-arm64-portable.zip`, which have never been run
-- `dist/James Viewer` (1.0.0) and `dist/1.1.0` are older, and neither can open PowerPoint files on a normal install. Leave them alone while the user may still have one open.
+- Only the zips of 1.0.0 and 1.1.0 are kept, as the user asked on 2026-11-09. Neither version can open PowerPoint files on a normal install.
 
 ## Waiting on the user
 
