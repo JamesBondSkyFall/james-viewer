@@ -40,6 +40,28 @@ def decrypt_office(path: str | Path, password: str, out_path: str | Path) -> Non
         raise CorruptFile(f"{path.name} could not be decrypted: {message}") from exc
 
 
+def decrypt_doc(path: str | Path, password: str, out_path: str | Path) -> None:
+    """Decrypt a legacy .doc. The office engine cannot open password-protected ones itself."""
+    import msoffcrypto
+    from msoffcrypto import exceptions as office_errors
+
+    path, out_path = Path(path), Path(out_path)
+    try:
+        with open(path, "rb") as handle:
+            office_file = msoffcrypto.OfficeFile(handle)
+            office_file.load_key(password=password)
+            with open(out_path, "wb") as output:
+                office_file.decrypt(output)
+    except office_errors.InvalidKeyError as exc:
+        out_path.unlink(missing_ok=True)
+        raise WrongPassword("That password is not correct.") from exc
+    except (office_errors.DecryptionError, office_errors.ParseError, office_errors.FileFormatError, ValueError, OSError) as exc:
+        out_path.unlink(missing_ok=True)
+        if "password" in str(exc).lower() or "key" in str(exc).lower():
+            raise WrongPassword("That password is not correct.") from exc
+        raise CorruptFile(f"{path.name} could not be decrypted: {exc}") from exc
+
+
 def decrypt_ppt(path: str | Path, password: str, out_path: str | Path) -> None:
     """Decrypt a legacy .ppt, following [MS-PPT] 2.3.7 and [MS-OFFCRYPTO] 2.3.5.
 

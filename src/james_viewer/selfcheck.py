@@ -143,6 +143,37 @@ def _check_office(work: Path) -> str:
     return f"PowerPoint slide rendered in {time.perf_counter() - started:.1f} s"
 
 
+def _sample_word() -> Path:
+    from .core import paths
+
+    return paths.app_dir() / "licenses" / "self-check.docx" if getattr(sys, "frozen", False) else paths.app_dir() / "tests" / "fixtures" / "word-rich.docx"
+
+
+def _check_word(work: Path) -> str:
+    from .core.docx_engine import read_paragraphs, write_word
+    from .core.office_engine import OfficeEngine
+    from .core.pdf_engine import PdfiumDocuments
+
+    edited = work / "edited.docx"
+    write_word(_sample_word(), {0: "Self-check 自检"}, edited, font_everywhere=True)
+    assert read_paragraphs(edited)[0].text == "Self-check 自检", "the edit was not kept"
+    engine = OfficeEngine()
+    started = time.perf_counter()
+    output = work / "word.pdf"
+    try:
+        engine.word_to_pdf(edited, output)
+    finally:
+        engine.close()
+    documents = PdfiumDocuments()
+    try:
+        pages = len(documents.page_sizes(str(output)))
+        data, width, height, stride, channels = documents.render(str(output), None, 0, 600, 800)
+        assert pages >= 1 and _dark_pixels(data, width, height, stride, channels) > 20, "the page rendered blank"
+    finally:
+        documents.close_all()
+    return f"edited a document and rendered {pages} pages in {time.perf_counter() - started:.1f} s"
+
+
 CHECKS = (
     ("Drawing text and fonts", _check_drawing),
     ("PDF viewing", _check_pdf),
@@ -150,6 +181,7 @@ CHECKS = (
     ("PowerPoint passwords", _check_powerpoint_password),
     ("Markdown and formulas", _check_markdown),
     ("PowerPoint office engine", _check_office),
+    ("Word documents", _check_word),
 )
 
 

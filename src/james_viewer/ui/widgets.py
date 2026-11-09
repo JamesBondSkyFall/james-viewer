@@ -269,6 +269,14 @@ def ask(parent, heading: str, text: str, confirm: str, cancel: str = "Cancel", d
     return box.clickedButton() is accept
 
 
+def ask_text(parent, heading: str, label: str) -> str | None:
+    """A few lines of text from the reader, or None if they cancel."""
+    from PySide6.QtWidgets import QInputDialog
+
+    text, accepted = QInputDialog.getMultiLineText(parent, heading, label)
+    return text.strip() if accepted and text.strip() else None
+
+
 def tell(parent, heading: str, text: str) -> None:
     box = QMessageBox(parent)
     box.setWindowTitle("James Viewer")

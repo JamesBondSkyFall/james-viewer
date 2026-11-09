@@ -6,18 +6,20 @@ import html
 import re
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, QRectF, QSize, Qt, QTimer, QUrl, Signal
+import shiboken6
+
+from PySide6.QtCore import QEvent, QObject, QPoint, QRectF, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QColor, QCursor, QDesktopServices, QFont, QGuiApplication, QImage, QImageReader, QLinearGradient, QPainter,
     QTextCursor,
 )
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QTextBrowser, QToolButton, QVBoxLayout,
-    QWidget,
+    QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPlainTextEdit, QPushButton, QTextBrowser, QToolButton,
+    QVBoxLayout, QWidget,
 )
 
-from ..core.markdown_engine import Asset, MarkdownPage
+from ..core.markdown_engine import Asset, MarkdownPage, parse_markdown_text, source_encoding
 from ..core.pdf_engine import PdfAccess, copy_file
 from . import theme, widgets
 from .presenter import CursorAutoHide
@@ -62,15 +64,67 @@ class MarkdownDocument(QObject):
         self.deck = None
         self.notes = list(page.notes)
         self.pages = (page,)
-        self.dirty = False
         self.preparing = False
         self.current = 0
-        self.undo_label = ""
-        self.redo_label = ""
         self.can_edit_pages = False
         self.can_copy_text = True
-        self.edit_block_reason = "Markdown files are read-only in James Viewer."
+        self.edit_block_reason = "Markdown has no pages to arrange. Use Edit to change the text."
         self.closed = False
+        self.replace_confirmed = False
+        self.text = page.text
+        self._saved_text = page.text
+        self._history: list[tuple[str, str]] = []
+        self._future: list[tuple[str, str]] = []
+        try:
+            raw = self.path.read_bytes()
+        except OSError:
+            raw = b""
+        self.encoding = source_encoding(raw)
+        self.newline = "\r\n" if b"\r\n" in raw else "\n"
+
+    text_changed = Signal()
+
+    @property
+    def dirty(self) -> bool:
+        return self.text != self._saved_text
+
+    @property
+    def undo_label(self) -> str:
+        return self._history[-1][0] if self._history else ""
+
+    @property
+    def redo_label(self) -> str:
+        return self._future[-1][0] if self._future else ""
+
+    def _set_text(self, text: str) -> None:
+        self.text = text
+        self.page = parse_markdown_text(self.path, text)
+        self.pages = (self.page,)
+        self.text_changed.emit()
+        self.state_changed.emit()
+
+    def replace_lines(self, start: int, end: int, text: str) -> None:
+        """Put `text` in place of source lines start to end, the Markdown behind one block."""
+        lines = self.text.split("\n")
+        new = lines[:start] + (text.split("\n") if text else []) + lines[end:]
+        updated = "\n".join(new)
+        if updated == self.text:
+            return
+        self._history.append(("Edit text", self.text))
+        self._future.clear()
+        self._set_text(updated)
+
+    def undo(self) -> None:
+        if self._history:
+            label, text = self._history.pop()
+            self._future.append((label, self.text))
+            self._set_text(text)
+
+    def redo(self) -> None:
+        if self._future:
+            label, text = self._future.pop()
+            self._history.append((label, self.text))
+            self._set_text(text)
 
     def start_rendering(self) -> None:
         pass
@@ -79,11 +133,18 @@ class MarkdownDocument(QObject):
         pass
 
     def save_copy(self, out: Path, *, unprotected: bool = False) -> list[str]:
-        copy_file(self.path, out)
+        if self.text == self.page.text and not self._history and Path(out) != self.path:
+            copy_file(self.path, out)
+            return []
+        data = self.text.replace("\r\n", "\n").replace("\n", self.newline).encode(self.encoding)
+        temporary = Path(out).with_name(f".{Path(out).name}.saving")
+        temporary.write_bytes(data)
+        temporary.replace(out)
         return []
 
     def mark_saved(self) -> None:
-        pass
+        self._saved_text = self.text
+        self.state_changed.emit()
 
     def close(self) -> None:
         self.closed = True
@@ -125,6 +186,13 @@ class _Browser(QTextBrowser):
         self.pointer_moved.emit()
         super().mouseMoveEvent(event)
 
+    def mousePressEvent(self, event) -> None:
+        if self.reader.editing and event.button() == Qt.MouseButton.LeftButton:
+            if self.reader.open_editor_at(event.position().toPoint()):
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
     def keyPressEvent(self, event) -> None:
         bar = self.verticalScrollBar()
         key = event.key()
@@ -154,6 +222,7 @@ class MarkdownReader(QWidget):
     scrolled = Signal()
     link_opened = Signal(str)
     pointer_moved = Signal()
+    source_edited = Signal(int, int, str)  # first line, line after the last, new Markdown
 
     def __init__(self, page: MarkdownPage, *, full_screen: bool = False, parent=None):
         super().__init__(parent)
@@ -180,7 +249,18 @@ class MarkdownReader(QWidget):
         self._timer.timeout.connect(self._refresh)
         self.selection_available = False
         self.browser.copyAvailable.connect(self._note_selection)
+        self.editing = False
+        self._editor: QPlainTextEdit | None = None
+        self._editor_lines: tuple[int, int] = (0, 0)
+        self._block_marks: list[tuple[int, int]] = []  # (character position, block number)
+        self.browser.verticalScrollBar().valueChanged.connect(lambda _value: self.close_editor(True))
         self._fill_natural_sizes()
+
+    def set_page(self, page: MarkdownPage) -> None:
+        """Show an edited version, keeping the reader's place."""
+        self.page = page
+        self._fill_natural_sizes()
+        self.render()
 
     def _note_selection(self, available: bool) -> None:
         self.selection_available = available
@@ -435,10 +515,13 @@ class MarkdownReader(QWidget):
         self.update()
 
     def _index_headings(self) -> None:
-        """Remember where each heading landed, for highlighting the current one in the outline."""
+        """Remember where each heading and each block landed, for the outline and for editing."""
+        if not shiboken6.isValid(self.browser):
+            return  # the tab closed before this queued call ran
         document = self.browser.document()
         layout = document.documentLayout()
         tops = []
+        marks: list[tuple[int, int]] = []
         block = document.begin()
         while block.isValid():
             iterator = block.begin()
@@ -448,9 +531,12 @@ class MarkdownReader(QWidget):
                     for name in fragment.charFormat().anchorNames():
                         if re.fullmatch(r"h\d+", name):
                             tops.append((round(layout.blockBoundingRect(block).top()), name))
+                        elif re.fullmatch(r"src\d+", name):
+                            marks.append((fragment.position(), int(name[3:])))
                 iterator += 1
             block = block.next()
         self._heading_tops = tops
+        self._block_marks = marks
         self.scrolled.emit()
 
     def current_heading(self) -> str | None:
@@ -464,6 +550,78 @@ class MarkdownReader(QWidget):
                 break
             current = name
         return current
+
+    # -- editing in place ---------------------------------------------------------------------------------
+
+    def open_editor_at(self, point: QPoint) -> bool:
+        """Turn the block under `point` into its Markdown source, ready to edit."""
+        if not self._block_marks:
+            self._index_headings()
+        position = self.browser.cursorForPosition(point).position()
+        earlier = [mark for mark in self._block_marks if mark[0] <= position]
+        if not earlier or not self.page.blocks:
+            return False
+        self.close_editor(True)
+        mark_position, number = earlier[-1]
+        later = [mark for mark in self._block_marks if mark[0] > mark_position]
+        start, end = self.page.blocks[number]
+        lines = self.page.text.split("\n")[start:end]
+        while lines and not lines[-1].strip():
+            lines.pop()
+        cursor = QTextCursor(self.browser.document())
+        cursor.setPosition(mark_position)
+        top = self.browser.cursorRect(cursor).top()
+        if later:
+            cursor.setPosition(later[0][0])
+            bottom = self.browser.cursorRect(cursor).top()
+        else:
+            bottom = top + 60
+        editor = QPlainTextEdit(self.browser.viewport())
+        font = QFont()
+        font.setFamilies(["Consolas", *theme.SANS_FAMILIES])
+        font.setPixelSize(round(BASE_FONT * 0.92 * self.zoom))
+        editor.setFont(font)
+        editor.setPlainText("\n".join(lines))
+        editor.setStyleSheet(
+            f"QPlainTextEdit {{ background: #fbfdfb; color: {theme.INK}; border: 2px solid {theme.ACCENT}; border-radius: 6px; padding: 4px; }}"
+        )
+        line_height = editor.fontMetrics().lineSpacing()
+        wanted = max(bottom - top + 12, line_height * (len(lines) + 1) + 18)
+        viewport = self.browser.viewport()
+        height = int(min(max(wanted, line_height * 2 + 18), viewport.height() * 0.8))
+        editor.setGeometry(6, int(max(0, min(top - 6, viewport.height() - height))), viewport.width() - 12, height)
+        editor.installEventFilter(self)
+        editor.show()
+        editor.setFocus()
+        self._editor = editor
+        self._editor_lines = (start, start + len(lines))  # the blank lines after the block stay as they are
+        return True
+
+    def close_editor(self, apply: bool) -> None:
+        editor, self._editor = self._editor, None
+        if editor is None:
+            return
+        text = editor.toPlainText()
+        original_start, original_end = self._editor_lines
+        editor.removeEventFilter(self)
+        editor.hide()
+        editor.deleteLater()
+        self.browser.setFocus()
+        if apply:
+            self.source_edited.emit(original_start, original_end, text)
+
+    def eventFilter(self, watched, event) -> bool:
+        if watched is self._editor:
+            if event.type() == QEvent.Type.KeyPress:
+                if event.key() == Qt.Key.Key_Escape:
+                    self.close_editor(False)
+                    return True
+                if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                    self.close_editor(True)
+                    return True
+            elif event.type() == QEvent.Type.FocusOut and event.reason() != Qt.FocusReason.PopupFocusReason:
+                QTimer.singleShot(0, lambda: self.close_editor(True))
+        return super().eventFilter(watched, event)
 
     def go_to_heading(self, anchor: str) -> None:
         self.browser.scrollToAnchor(anchor)
@@ -531,6 +689,14 @@ class Outline(QFrame):
             f"QListWidget::item:selected {{ background: {theme.ACCENT_SOFT}; color: {theme.INK}; }}"
         )
         self.items.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.empty = widgets.body("This document has no headings.", 12)
+        self.items.itemClicked.connect(lambda item: self.chosen.emit(item.data(Qt.ItemDataRole.UserRole)))
+        layout.addWidget(self.items, 1)
+        layout.addWidget(self.empty)
+        self.set_page(page)
+
+    def set_page(self, page: MarkdownPage) -> None:
+        self.items.clear()
         top = min((heading.level for heading in page.headings), default=1)
         self._rows: dict[str, int] = {}
         for row, heading in enumerate(page.headings):
@@ -542,10 +708,7 @@ class Outline(QFrame):
             item.setFont(font)
             self.items.addItem(item)
             self._rows[heading.anchor] = row
-        self.items.itemClicked.connect(lambda item: self.chosen.emit(item.data(Qt.ItemDataRole.UserRole)))
-        layout.addWidget(self.items, 1)
-        if not page.headings:
-            layout.addWidget(widgets.body("This document has no headings.", 12))
+        self.empty.setVisible(not page.headings)
 
     def mark(self, anchor: str | None) -> None:
         row = self._rows.get(anchor or "", -1)
@@ -566,6 +729,7 @@ class MarkdownTab(QWidget):
     insert_file_requested = Signal()
     paste_requested = Signal()
     link_opened = Signal(str)
+    save_in_place_requested = Signal()
 
     def __init__(self, document: MarkdownDocument, parent=None):
         super().__init__(parent)
@@ -587,6 +751,9 @@ class MarkdownTab(QWidget):
         self.canvas.scrolled.connect(lambda: self.outline.mark(self.canvas.current_heading()))
         self.canvas.zoom_changed.connect(self.zoom_label.setText)
         self.canvas.link_opened.connect(self.link_opened)
+        self.canvas.source_edited.connect(document.replace_lines)
+        document.text_changed.connect(self._text_changed)
+        document.state_changed.connect(self._sync_save)
         row.addWidget(self.outline)
         row.addWidget(self.canvas, 1)
         outer.addLayout(row, 1)
@@ -628,7 +795,25 @@ class MarkdownTab(QWidget):
         self.wheel_toggle.setToolTip("Choose what the plain mouse wheel does. Ctrl + wheel always zooms.")
         self.wheel_toggle.toggled.connect(self._wheel_mode_changed)
         row.addWidget(self.wheel_toggle)
+        row.addSpacing(6)
+        self.edit_toggle = QToolButton()
+        self.edit_toggle.setCheckable(True)
+        self.edit_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.edit_toggle.setText("Edit")
+        self.edit_toggle.setToolTip(
+            "Click any paragraph, heading, list, table, code or formula to edit its Markdown in place. "
+            "Click away or press Ctrl+Enter to apply, Esc to cancel."
+        )
+        self.edit_toggle.toggled.connect(self._edit_mode_changed)
+        row.addWidget(self.edit_toggle)
         row.addStretch(1)
+        self.save_in_place = QPushButton("Save")
+        self.save_in_place.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.save_in_place.setToolTip("Save your changes to this Markdown file (Ctrl+S)")
+        self.save_in_place.clicked.connect(self.save_in_place_requested)
+        self.save_in_place.setEnabled(False)
+        row.addWidget(self.save_in_place)
+        row.addSpacing(8)
         save = QPushButton("Save As")
         save.setCursor(Qt.CursorShape.PointingHandCursor)
         save.clicked.connect(self.save_requested)
@@ -665,10 +850,27 @@ class MarkdownTab(QWidget):
         return []
 
     def undo(self) -> None:
-        pass
+        self.canvas.close_editor(True)
+        self.document.undo()
 
     def redo(self) -> None:
-        pass
+        self.canvas.close_editor(True)
+        self.document.redo()
+
+    def _edit_mode_changed(self, on: bool) -> None:
+        self.canvas.editing = on
+        if not on:
+            self.canvas.close_editor(True)
+        self.canvas.browser.viewport().setCursor(Qt.CursorShape.PointingHandCursor if on else Qt.CursorShape.IBeamCursor)
+        if on:
+            self.message.emit("Click any part of the page to edit its Markdown. Click away to apply, Esc to cancel.")
+
+    def _text_changed(self) -> None:
+        self.canvas.set_page(self.document.page)
+        self.outline.set_page(self.document.page)
+
+    def _sync_save(self) -> None:
+        self.save_in_place.setEnabled(self.document.dirty)
 
     def duplicate_selected(self) -> None:
         pass

@@ -20,12 +20,14 @@ from . import paths
 from .errors import CorruptFile
 from .inspect import Note
 
-CACHE_VERSION = "2"
+CACHE_VERSION = "4"  # 4: pages keep their source, with plain line breaks, and its line for each block
 
 _IMG_TAG = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
 _ATTRIBUTE = re.compile(r"""([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""")
 _ZOOM = re.compile(r"zoom\s*:\s*([\d.]+)\s*(%?)", re.IGNORECASE)
 _VIEW_BOX = re.compile(r'viewBox="[-\d.]+ ([-\d.]+) ([\d.]+) ([\d.]+)"')
+_FIRST_BLOCK_TAG = re.compile(r"<(?:p|pre|td|th|li)\b[^>]*>", re.IGNORECASE)
+_FORMULAS: dict[tuple[str, bool], tuple] = {}  # drawn formulas, so editing a note does not redraw them all
 
 
 @dataclass
@@ -59,6 +61,8 @@ class MarkdownPage:
     assets: list[Asset]
     headings: list[Heading]
     notes: list[Note] = field(default_factory=list)
+    blocks: list[list[int]] = field(default_factory=list)  # the source lines, start and end, of each top-level block
+    text: str = ""  # the Markdown source itself
 
 
 def read_text(path: Path) -> str:
@@ -70,6 +74,19 @@ def _read_bytes(path: Path) -> bytes:
         return path.read_bytes()
     except OSError as exc:
         raise CorruptFile(f"{path.name} could not be read ({exc}).") from exc
+
+
+def source_encoding(data: bytes) -> str:
+    """The encoding to save an edited note in, so it stays readable by the apps that wrote it."""
+    if data.startswith(b"\xef\xbb\xbf"):
+        return "utf-8-sig"
+    if data.startswith(b"\xff\xfe") or data.startswith(b"\xfe\xff"):
+        return "utf-16"
+    try:
+        data.decode("utf-8")
+        return "utf-8"
+    except UnicodeDecodeError:
+        return "gb18030"
 
 
 def _decode(data: bytes) -> str:
@@ -366,6 +383,16 @@ def _make_parser(builder: _Builder):
 
 
 def _render_formula(asset: Asset, font_px: float = 16.0) -> None:
+    """Draw one formula to SVG, or reuse the drawing made for the same formula before."""
+    remembered = _FORMULAS.get((asset.source, asset.display))
+    if remembered is None:
+        _draw_formula(asset, font_px)
+        _FORMULAS[(asset.source, asset.display)] = (asset.blob, asset.width, asset.height, asset.pad_top, asset.pad_bottom, asset.error)
+    else:
+        asset.blob, asset.width, asset.height, asset.pad_top, asset.pad_bottom, asset.error = remembered
+
+
+def _draw_formula(asset: Asset, font_px: float = 16.0) -> None:
     """Draw one formula to SVG. A formula that cannot be drawn is shown as its source text."""
     import ziafont
     import ziamath
@@ -415,6 +442,11 @@ def parse_markdown(path: Path) -> MarkdownPage:
     return page
 
 
+def parse_markdown_text(path: Path, text: str) -> MarkdownPage:
+    """Parse edited Markdown that is not saved yet. Images still resolve from the file's folder."""
+    return _parse(Path(path), text)[0]
+
+
 def _image_stamp(asset: Asset) -> list:
     if asset.kind != "image" or asset.blob is not None:
         return [asset.key, 0, 0]
@@ -441,6 +473,8 @@ def _save(page: MarkdownPage, key: str, missing: list[str]) -> None:
             "missing": missing,
             "headings": [asdict(heading) for heading in page.headings],
             "notes": [asdict(note) for note in page.notes],
+            "blocks": page.blocks,
+            "text": page.text,
         }
         target = _saved_path(key)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -468,15 +502,41 @@ def _load_saved(path: Path, key: str) -> MarkdownPage | None:
             assets,
             [Heading(**heading) for heading in record["headings"]],
             [Note(**note) for note in record["notes"]],
+            record["blocks"],
+            record["text"],
         )
     except (OSError, ValueError, KeyError, TypeError):
         return None
 
 
 def _parse(path: Path, text: str) -> tuple[MarkdownPage, list[str]]:
+    text = text.replace("\r\n", "\n").replace("\r", "\n")  # saving puts the file's own line endings back
     builder = _Builder(path)
     parser = _make_parser(builder)
-    body = parser.render(text)
+    tokens = parser.parse(text)
+    # Render one top-level block at a time, marking each with the source lines it came from, so a
+    # click on the page can find the Markdown behind it. The mark goes inside the block's first tag,
+    # because a mark on its own line would add an empty line to the page.
+    env: dict = {}
+    pieces: list[str] = []
+    blocks: list[list[int]] = []
+    start = 0
+    while start < len(tokens):
+        end = start + 1
+        if tokens[start].nesting == 1:
+            depth = 1
+            while end < len(tokens) and depth:
+                depth += tokens[end].nesting
+                end += 1
+        html_piece = parser.renderer.render(tokens[start:end], parser.options, env)
+        source_lines = tokens[start].map
+        found = _FIRST_BLOCK_TAG.search(html_piece) if source_lines else None
+        if found:
+            html_piece = f'{html_piece[:found.end()]}<a name="src{len(blocks)}"></a>{html_piece[found.end():]}'
+            blocks.append(list(source_lines))
+        pieces.append(html_piece)
+        start = end
+    body = "".join(pieces)
     for asset in builder.assets:
         if asset.kind == "math":
             _render_formula(asset)
@@ -492,4 +552,4 @@ def _parse(path: Path, text: str) -> tuple[MarkdownPage, list[str]]:
     if "<script" in body.lower():
         notes.append(Note("Scripts are not run", "This file contains HTML scripts. James Viewer never runs them.", False))
     notes.append(Note("HTML support is basic", "Plain Markdown, tables, code, images and formulas are supported. Advanced HTML and CSS inside the file may look simpler than in a web browser.", False))
-    return MarkdownPage(path, body, builder.assets, builder.headings, notes), builder.missing_images
+    return MarkdownPage(path, body, builder.assets, builder.headings, notes, blocks, text), builder.missing_images

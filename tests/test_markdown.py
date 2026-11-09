@@ -536,7 +536,7 @@ def test_arrange_and_merge_decline_markdown_clearly(ui, notes, work):
     assert window.nav_mode == "view"
     assert any("Arrange is for PDF and PowerPoint" in message for message in ui.messages)
     window.merge_documents([str(notes), str(notes)])
-    assert any("Markdown files cannot be merged" in text for _heading, text in ui.told)
+    assert any("Markdown and Word files cannot be merged" in text for _heading, text in ui.told)
     window.set_nav("split")
     assert not window.split_merge.split_button.isEnabled()
     window.set_nav("view")

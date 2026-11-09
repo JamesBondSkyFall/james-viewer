@@ -78,7 +78,7 @@ def match_powerpoint_spacing(document):
                 pass
 
 
-def export_pdf(document, output):
+def export_pdf(document, output, filter_name="impress_pdf_Export"):
     data = uno.Any(
         "[]com.sun.star.beans.PropertyValue",
         (
@@ -93,7 +93,7 @@ def export_pdf(document, output):
     )
     document.storeToURL(
         uno.systemPathToFileUrl(output),
-        (prop("FilterName", "impress_pdf_Export"), prop("FilterData", data)),
+        (prop("FilterName", filter_name), prop("FilterData", data)),
     )
 
 
@@ -113,6 +113,28 @@ def handle(desktop, request):
             raise
         close_after_saving(document)
         return {"pages": len(hidden), "hidden": hidden}
+    if op == "wordpdf":
+        document = load(desktop, request["input"])
+        try:
+            time.sleep(SETTLE_SECONDS)
+            export_pdf(document, request["output"], "writer_pdf_Export")
+        except Exception:
+            document.close(True)
+            raise
+        close_after_saving(document)
+        return {}
+    if op == "docx":
+        document = load(desktop, request["input"])
+        try:
+            document.storeToURL(
+                uno.systemPathToFileUrl(request["output"]),
+                (prop("FilterName", "MS Word 2007 XML"),),
+            )
+        except Exception:
+            document.close(True)
+            raise
+        close_after_saving(document)
+        return {}
     if op == "pptx":
         document = load(desktop, request["input"])
         try:

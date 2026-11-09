@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / ".build"
-VERSION = "1.1.1"
+VERSION = "1.2.0"
 DIST = ROOT / "dist" / VERSION / "x64"
 
 # Parts of the packaged Qt that James Viewer does not load.
@@ -69,6 +69,7 @@ def main() -> None:
     licenses.mkdir(exist_ok=True)
     shutil.copyfile(ROOT / "docs" / "THIRD_PARTY.md", licenses / "THIRD_PARTY.md")
     shutil.copyfile(ROOT / "tests" / "fixtures" / "rich.pptx", licenses / "self-check.pptx")
+    shutil.copyfile(ROOT / "tests" / "fixtures" / "word-rich.docx", licenses / "self-check.docx")
     shutil.copyfile(ROOT / "tools" / "Self-check.cmd", app / "Self-check.cmd")
     print(f"app with office: {size_of(app) / 1e6:.0f} MB", flush=True)
 

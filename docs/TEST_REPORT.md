@@ -1,10 +1,21 @@
-# James Viewer 1.1.1: test report
+# James Viewer 1.2.0: test report
 
 Tested on Windows 11 x64, 16 GB RAM, 2880×1800 at 200% scaling.
 
 ## Status
 
-**All automated tests and real-input checks pass on the x64 package of 1.1.1, it passes its self-check, and all 35 documents in `Learning with notes` open.** The ARM64 package has never been run. The limits that remain are listed under [Not supported or not done](#not-supported-or-not-done).
+**On 1.2.0, all 229 automated tests pass, the x64 package passes 7 of 7 self-checks, and all 28 documents tried open: the 20 decks and 6 Markdown files in `Learning with notes`, and 2 lecture Word documents.** Real Microsoft Word opens Word files edited by James Viewer. The real-input test has not been run on 1.2.0. No ARM64 package was built for 1.2.0, as you asked; the ARM64 package of 1.1.1 has never been run. The limits that remain are listed under [Not supported or not done](#not-supported-or-not-done).
+
+## New in 1.2.0
+
+- **Word:** `.doc` and `.docx` open, including password-protected ones, laid out as printed. Paragraph and table-cell text can be edited with each paragraph's formatting kept. Times New Roman can be applied to the English letters of edited paragraphs or of the whole document, and Chinese text keeps its font. Save As writes DOCX or PDF. A `.doc` is converted to DOCX before editing, after asking.
+- **PDF annotations:** highlight, underline, notes, text boxes and drawing, saved as standard PDF annotations with their own appearance, so other readers show them.
+- **Markdown editing on the formatted page:** click a block in Edit mode to change its Markdown, with undo, redo and Save. Saving keeps the file's encoding and line endings, and asks once before replacing the original.
+- **The office engine now includes Writer**, so the package is larger: 547 MB unpacked, 199 MB zip.
+
+### Checked in real Microsoft Word
+
+Copies of two lecture Word documents were edited by James Viewer's own code, once changing one paragraph with Times New Roman for that paragraph, and once with Times New Roman for all English text. Word opened all four files without a message. In one of them, English words and numbers inside Chinese paragraphs were Cambria in the original, stayed Cambria with one paragraph edited (only the new words were Times New Roman), and were all Times New Roman with the whole-document option. The Chinese title kept its own font.
 
 ## Fixed in 1.1.1
 
@@ -14,6 +25,20 @@ Tested on Windows 11 x64, 16 GB RAM, 2880×1800 at 200% scaling.
 - **Some decks crashed the office engine at random.** A batch of `course-draft.pptx` with two large pictures crashed 6 of 25 starts, while the deck was closing, after its PDF was saved. The worker now always waits 0.3 s after loading (0 of 25, then 0 of 40), and a crash after saving no longer counts as a failure. Each batch of slides takes 0.3 s longer.
 
 ## Real files
+
+### 1.2.0
+
+Opened in the real window with the normal data folder, every page checked. Copies were used, and the originals' hashes are unchanged.
+
+| Files | Result |
+|---|---|
+| `Learning with notes`: 20 PPTX and 6 Markdown, including `Recurrent_Neural_Networks_English.pptx` | 26 of 26 open |
+| Two lecture Word documents | 2 of 2 open |
+| In all | 28 files, 1,291 pages, none blank |
+
+`Recurrent_Neural_Networks_English.pptx` failed to open only in the old 1.0.0 build in `dist\James Viewer`, which cannot open any PowerPoint file on a normal install. It opens in 1.1.1 and 1.2.0.
+
+### 1.1.1
 
 Each file was opened in the real window with the normal data folder, and every page was checked. Copies were used, and the originals' hashes are unchanged.
 
@@ -31,11 +56,11 @@ Each file was opened in the real window with the normal data folder, and every p
 
 ## Automated tests
 
-185 of 185 pass, driving the real window on the trimmed office bundle, on an unlocked PC.
+229 of 229 pass on 1.2.0, in about 3 minutes, including new tests for Word (16), PDF annotations (9) and Markdown editing (9). 185 of 185 passed on 1.1.1,, driving the real window on the trimmed office bundle, on an unlocked PC.
 
 ## ARM64 package
 
-Built on this x64 PC by `tools/build_arm64.py`, because PyInstaller cannot build for another processor. **It has not been run on an ARM64 PC.** Windows here refuses to start it, with error 216, as it should. What has been checked:
+Not built for 1.2.0. What follows is about 1.1.1, built on this x64 PC by `tools/build_arm64.py`, because PyInstaller cannot build for another processor. **It has not been run on an ARM64 PC.** Windows here refuses to start it, with error 216, as it should. What has been checked:
 
 - All 275 native files that can be loaded are ARM64, and all their imports resolve to the package or to Windows. The checks only read the files, so they cannot show that the code behaves correctly.
 - The same build steps with x64 parts give an exe that runs here and passes 6 of 6 self-checks, including PowerPoint rendering. That also tests cryptography 46.0.3, the version ARM64 has to use.
@@ -130,7 +155,7 @@ Three problems found by comparing and fixed: false line breaks in no-wrap text, 
 
 ## Not supported or not done
 
-- **The ARM64 package has not been run.** See [ARM64 package](#arm64-package).
+- **No ARM64 package for 1.2.0, and the 1.1.1 one has not been run.** See [ARM64 package](#arm64-package).
 - **PPS, PPSX and ODP are not supported yet**, deferred as you asked.
 - At very high zoom, PDF and slide pages can look slightly soft, from about 430% on a Letter page at 200% display scaling.
 - **Not tested on a PC without Microsoft Office** or without the Visual C++ runtime. The app does not use Office, and it bundles the runtime, but this PC has Office installed, so neither is proven.
@@ -143,5 +168,9 @@ Three problems found by comparing and fixed: false line breaks in no-wrap text, 
 - Copy and paste of slides works only within James Viewer, not to or from PowerPoint.
 - Duplicated or merged slides do not keep comments. Merged decks do not keep embedded fonts.
 - Deleting PDF pages removes the file's accessibility tags, and links to deleted pages. Merged PDF form fields were not tested.
-- Markdown is read-only. Online images are not downloaded. Formulas use a LaTeX subset, and any unsupported one shows as source text with a note. Advanced HTML and CSS look simpler than in a browser.
+- **Word:** paragraphs holding fields (page numbers, tables of contents) cannot be edited, nor can headers, footers, text boxes or footnotes. Documents with Word's Restrict Editing stay read-only. Pages cannot be rearranged, split or merged. Layout comes from LibreOffice, so line breaks can differ slightly from Word. Only standard Word encryption is tested.
+- **PDF annotations:** not on rotated pages. Text boxes are drawn as a picture of the text, so another reader can move or delete one but not change its words. Existing annotations made elsewhere are shown but cannot be edited.
+- **Markdown editing** works one top-level block at a time, such as a whole list or table.
+- **The real-input test has not been run on 1.2.0**, so the new editing features were driven by the automated tests only, not by real key presses and mouse clicks.
+- Markdown online images are not downloaded. Formulas use a LaTeX subset, and any unsupported one shows as source text with a note. Advanced HTML and CSS look simpler than in a browser.
 - Plain wheel scrolls by default so long files stay readable. Plain-wheel zoom is the toolbar switch, and it is not remembered between runs.

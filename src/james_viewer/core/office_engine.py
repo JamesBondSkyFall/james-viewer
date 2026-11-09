@@ -469,6 +469,16 @@ class OfficeEngine:
             raise OfficeEngineError(f"The office engine produced no pages for {source.name}.")
         return reply
 
+    def word_to_pdf(self, source: Path, output: Path) -> None:
+        self._run("wordpdf", source.name, **self._job(source, output))
+        if not output.exists():
+            raise OfficeEngineError(f"The office engine produced no pages for {source.name}.")
+
+    def word_to_docx(self, source: Path, output: Path) -> None:
+        self._run("docx", source.name, **self._job(source, output))
+        if not output.exists():
+            raise OfficeEngineError(f"The office engine could not convert {source.name} to DOCX.")
+
     def to_pptx(self, source: Path, output: Path) -> None:
         self._run("pptx", source.name, **self._job(source, output))
         if not output.exists():

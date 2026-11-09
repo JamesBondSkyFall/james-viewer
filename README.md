@@ -1,12 +1,12 @@
 # James Viewer
 
-A small Windows app, for x64 and ARM64 PCs, for viewing PDF, PPT, PPTX and Markdown files, and for organising PDF and PowerPoint pages. It works fully offline, with no account, and needs neither Microsoft Office nor Adobe Acrobat.
+A small Windows app, for x64 and ARM64 PCs, for viewing and editing PDF, PowerPoint (PPT, PPTX), Word (DOC, DOCX) and Markdown files, and for organising PDF and PowerPoint pages. It works fully offline, with no account, and needs neither Microsoft Office nor Adobe Acrobat.
 
 ## Getting started
 
 1. Unzip the package for your PC anywhere, such as your Documents folder. Nothing is installed.
-   - Most PCs: `James-Viewer-1.1.1-win-x64-portable.zip`
-   - ARM64 PCs, such as the Surface Laptop 7: `James-Viewer-1.1.1-win-arm64-portable.zip`
+   - Most PCs: `James-Viewer-1.2.0-win-x64-portable.zip`
+   - ARM64 PCs, such as the Surface Laptop 7: `James-Viewer-1.2.0-win-arm64-portable.zip`
 2. Run `James Viewer\James Viewer.exe`.
 3. Choose files, or drop them anywhere in the window.
 
@@ -34,7 +34,30 @@ Open any `.md` or `.markdown` file. Images in folders such as `assets` beside th
 - **Document layout:** the panel on the left lists the headings. Click one to jump to it. **Ctrl + L** shows or hides the panel.
 - **Full screen:** press **F11** or choose **Full Screen**. Only the document shows, and zoom works the same way. Ctrl + L shows the layout panel there too. **Esc** or F11 leaves.
 
-James Viewer only reads your Markdown files. It does not edit them, and writes nothing beside them.
+- **Edit on the page:** click **Edit** in the toolbar, then click any paragraph, heading, list, table, code block or formula. That part turns into its Markdown text, right where it was. Change it, then click away or press **Ctrl + Enter** to apply, or press **Esc** to cancel. Ctrl + Z and Ctrl + Y undo and redo.
+- **Save:** **Ctrl + S** or **Save** writes your changes back to the file. The first time, James Viewer asks before it replaces the original. The file keeps its own encoding and line endings. **Save As** writes a copy instead.
+
+James Viewer changes a Markdown file only when you save it, and writes nothing else beside it.
+
+## Word
+
+Open any `.doc` or `.docx` file, including password-protected ones. Pages look as they would printed, and zoom, full screen, thumbnails and copying text work as for PDF.
+
+- **Edit text:** click the **T** button. The panel lists each paragraph and table cell on the current page. Change the words and click **Apply**. Each paragraph keeps its formatting, and the pages are laid out again, so text can move onto another page. Undo and redo work.
+- **Times New Roman:** tick **Times New Roman for my changes** to set the English letters of the paragraphs you change in Times New Roman. **Times New Roman for all English text** does it for the whole document. Chinese text always keeps its own font.
+- **Save As:** DOCX, or PDF of the pages as shown. A `.doc` is converted to DOCX when you first edit it, after asking, and the original `.doc` stays unchanged.
+- Paragraphs holding fields, such as page numbers or a table of contents, cannot be edited. Headers and footers are shown but not edited. Documents whose author used Word's Restrict Editing stay read-only. Word pages cannot be rearranged, split or merged.
+
+## Annotating PDFs
+
+In a PDF's toolbar:
+
+- **Highlight** and **Underline:** select text on the page, then click the button.
+- **Note:** click the note button, then click on the page and type. Readers see a small note icon and open it to read.
+- **Text box:** click the text box button, then click where it should go and type. It shows on the page itself.
+- **Draw:** click the pen button, then drag on the page with the mouse or a pen.
+
+Annotations are saved as standard PDF annotations, so Acrobat and web browsers show them, and Acrobat can still edit them. Undo, redo and Save As work as for page changes. A PDF whose author does not allow comments cannot be annotated, and annotations on rotated pages are not supported yet.
 
 ## Full screen for PDF and PowerPoint
 

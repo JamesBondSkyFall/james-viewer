@@ -24,7 +24,7 @@ from ..core.pdf_engine import (
     PdfAccess, PdfPageSpec, blank_page_pdf, copy_file, read_access, remove_protection, write_pdf,
 )
 from ..core.pptx_engine import DeckInfo, SlideSpec, TextBlock, build_deck, list_text_blocks, read_deck_info
-from ..core.security import decrypt_office, decrypt_ppt, encrypt_pptx
+from ..core.security import decrypt_doc, decrypt_office, decrypt_ppt, encrypt_pptx
 from ..core.sniff import FileKind, sniff
 from .services import RenderRef, Workspace
 
@@ -99,6 +99,18 @@ def prepare(workspace: Workspace, path: Path, password: str | None):
             pages.append(page)
         return Opened(path, kind, password, access, str(raw_copy), str(raw_copy), None, tuple(pages),
                       inspect.inspect_pdf(raw_copy, password))
+
+    if kind.family == "word":
+        source = raw_copy
+        if kind.encrypted:
+            if not password:
+                raise PasswordRequired(f"{path.name} is protected with a password.")
+            source = folder / f"unlocked.{kind.format}"
+            (decrypt_doc if kind.format == "doc" else decrypt_office)(raw_copy, password, source)
+        elif raw_copy.suffix != f".{kind.format}":
+            source = folder / f"document.{kind.format}"
+            shutil.copyfile(raw_copy, source)
+        return Opened(path, kind, password, PdfAccess(encrypted=kind.encrypted), str(raw_copy), str(source), None, (), [])
 
     source = raw_copy
     if kind.encrypted:
@@ -212,6 +224,27 @@ class Document(QObject):
     @property
     def can_edit_text(self) -> bool:
         return self.family == "office" and self.can_edit_pages
+
+    @property
+    def can_annotate(self) -> bool:
+        return self.family == "pdf" and self.access.can_annotate
+
+    def annotate(self, position: int, annotation: dict, label: str) -> None:
+        """Add a highlight, underline, note, text box or ink stroke to a PDF page."""
+        if not self.can_annotate:
+            raise PermissionDenied("The author of this PDF does not allow comments or highlights to be added.")
+        page = self.pages[position]
+        updated = replace(page, edits=page.edits + ((len(page.edits), json.dumps(annotation, ensure_ascii=False)),))
+        pages = list(self.pages)
+        pages[position] = updated
+        self._apply(label, tuple(pages), position)
+
+    def clear_annotations(self, position: int) -> None:
+        page = self.pages[position]
+        if page.edits:
+            pages = list(self.pages)
+            pages[position] = replace(page, edits=())
+            self._apply("Remove annotations", tuple(pages), position)
 
     # -- undo ------------------------------------------------------------------------------------
 
@@ -367,6 +400,8 @@ class Document(QObject):
         if ref is None:
             page = self.pages[position]
             ref = renders.get(render_key(page))
+            if ref is None and self.family == "pdf" and page.edits:
+                ref = renders.get(render_key(replace(page, edits=())))  # until its annotations are drawn
         return ref
 
     def page_size(self, position: int) -> tuple[float, float]:
@@ -481,6 +516,9 @@ class Document(QObject):
 
     def _refresh_renders(self) -> None:
         """Render whatever the current state needs and does not have yet."""
+        if self.family == "pdf":
+            self._refresh_annotated()
+            return
         if self.family != "office" or self.preparing or self.format == "ppt":
             return
         missing = [i for i in range(len(self.pages)) if self._key_at(i) not in self.workspace.renders]
@@ -496,6 +534,30 @@ class Document(QObject):
         jobs = [([self.pages[i].spec() for i in run], [self._key_at(i) for i in run], run[0] + 1) for run in runs]
         self.status.emit("Updating preview…")
         self.workspace.run(lambda: self._render_runs(jobs), self._runs_done, self._rendering_failed, office=True)
+
+    def _refresh_annotated(self) -> None:
+        renders = self.workspace.renders
+        wanted = {render_key(page): page for page in self.pages if page.edits and render_key(page) not in renders}
+        if not wanted:
+            self.renders_changed.emit()
+            return
+
+        def work() -> None:
+            from ..core.pdf_annotations import annotated_page
+            from .annotation_text import paint_text
+
+            for key, page in wanted.items():
+                if self.closed:
+                    return
+                plain = renders.get(render_key(replace(page, edits=())))
+                out = self.workspace.session.new_dir("annotated") / "page.pdf"
+                annotated_page(page.source, plain.password if plain else self.password, page.index,
+                               [text for _order, text in page.edits], out, paint_text)
+                width, height = self.workspace.pdfium.page_sizes(str(out))[0]
+                renders[key] = RenderRef(str(out), 0, None, width, height)
+                self.renders_changed.emit()
+
+        self.workspace.run(work, lambda _result: self.renders_changed.emit(), self._rendering_failed)
 
     def _render_runs(self, jobs: list) -> None:
         engine = self.workspace.office
@@ -523,6 +585,9 @@ class Document(QObject):
             self.workspace.office.to_pptx(Path(self.base_path), out)
             self.ppt_as_pptx = str(out)
         return self.ppt_as_pptx
+
+    def convert_for_editing(self, on_done) -> None:
+        self.convert_to_pptx(on_done)
 
     def convert_to_pptx(self, on_done) -> None:
         """Switch a .ppt document to an editable PPTX. The original file is not touched."""
@@ -554,9 +619,16 @@ class Document(QObject):
     def _pdf_specs(self, pages: tuple[Page, ...] | list[Page]) -> list[PdfPageSpec]:
         specs = []
         for page in pages:
-            ref = self.workspace.renders.get(render_key(page))
-            specs.append(PdfPageSpec(page.source, ref.password if ref else self.password, page.index))
+            ref = self.workspace.renders.get(render_key(replace(page, edits=())))
+            annotations = tuple(text for _order, text in page.edits)
+            specs.append(PdfPageSpec(page.source, ref.password if ref else self.password, page.index, annotations))
         return specs
+
+    @staticmethod
+    def _paint():
+        from .annotation_text import paint_text
+
+        return paint_text
 
     def save_copy(self, out: Path, *, unprotected: bool = False) -> list[str]:
         """Write the current state to `out`. Runs on a worker thread. Returns warnings."""
@@ -578,7 +650,7 @@ class Document(QObject):
             return []
         base = PdfPageSpec(self.base_path, self.password, 0)
         encryption = bool(self.protected and not unprotected)
-        write_pdf(base, self._pdf_specs(self.pages), out, encryption=encryption)
+        write_pdf(base, self._pdf_specs(self.pages), out, encryption=encryption, paint=self._paint())
         return []
 
     def _save_office(self, out: Path, unprotected: bool) -> list[str]:
@@ -617,7 +689,7 @@ class Document(QObject):
         pages = [self.pages[i] for i in positions]
         if self.family == "pdf":
             base = PdfPageSpec(self.base_path, self.password, 0)
-            write_pdf(base, self._pdf_specs(pages), out, encryption=bool(self.protected))
+            write_pdf(base, self._pdf_specs(pages), out, encryption=bool(self.protected), paint=self._paint())
             return []
         base_path = self.base_path
         specs = [page.spec() for page in pages]

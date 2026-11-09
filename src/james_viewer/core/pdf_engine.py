@@ -24,6 +24,7 @@ class PdfAccess:
     can_extract: bool = True
     can_assemble: bool = True
     can_modify: bool = True
+    can_annotate: bool = True
 
     @property
     def fully_open(self) -> bool:
@@ -50,6 +51,7 @@ def read_access(path: str | Path, password: str | None) -> PdfAccess:
                 # The PDF spec's general "modify" bit also permits assembling pages.
                 can_assemble=owner or bool(allow.modify_assembly) or bool(allow.modify_other),
                 can_modify=owner or bool(allow.modify_other),
+                can_annotate=owner or bool(allow.modify_annotation),
             )
     except pikepdf.PasswordError as exc:
         if password:
@@ -125,6 +127,7 @@ class PdfPageSpec:
     source: str
     password: str | None
     index: int
+    annotations: tuple[str, ...] = ()  # JSON, added when the page is written
 
 
 def _atomic_save(pdf: pikepdf.Pdf, out_path: str | Path, encryption) -> None:
@@ -243,7 +246,7 @@ def _prune_after_page_removal(pdf: pikepdf.Pdf, removed: set[tuple[int, int]]) -
         root.AcroForm.Fields = pikepdf.Array([field for field in root.AcroForm.Fields if live(field)])
 
 
-def write_pdf(base: PdfPageSpec, specs: list[PdfPageSpec], out_path: str | Path, *, encryption=False) -> None:
+def write_pdf(base: PdfPageSpec, specs: list[PdfPageSpec], out_path: str | Path, *, encryption=False, paint=None) -> None:
     """Write `specs` in order to a new PDF. `base` supplies the document-level structure."""
     if not specs:
         raise ViewerError("A document must keep at least one page.")
@@ -285,6 +288,12 @@ def write_pdf(base: PdfPageSpec, specs: list[PdfPageSpec], out_path: str | Path,
                     _prune_after_page_removal(pdf, removed)
                 if "/PageLabels" in pdf.Root:
                     del pdf.Root.PageLabels
+            if any(spec.annotations for spec in specs):
+                from .pdf_annotations import add_annotations
+
+                for position, spec in enumerate(specs):
+                    if spec.annotations:
+                        add_annotations(pdf, pdf.pages[position], list(spec.annotations), paint)
             _atomic_save(pdf, out_path, encryption)
     except pikepdf.PasswordError as exc:
         raise WrongPassword("A password needed for this operation is no longer valid.") from exc

@@ -176,7 +176,7 @@ class HeroCard(QFrame):
         words = QVBoxLayout()
         words.setSpacing(10)
         words.addStretch(1)
-        words.addWidget(widgets.eyebrow("PDF · PPT · PPTX · MD"))
+        words.addWidget(widgets.eyebrow("PDF · PPT · PPTX · DOC · DOCX · MD"))
         words.addWidget(widgets.title("Open a document", 36))
         words.addWidget(widgets.body("Read, arrange and present, entirely offline.\nDrop files anywhere in this window, or choose them here.", 13))
         words.addSpacing(10)

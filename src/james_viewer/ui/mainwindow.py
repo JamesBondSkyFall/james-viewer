@@ -27,6 +27,7 @@ from .markdown_view import MarkdownDocument, MarkdownPresenter, MarkdownTab
 from .pages import HomePage, ProtectionPage, SplitMergePage
 from .presenter import Presenter
 from .services import Workspace
+from .word_document import WordDocument
 
 SIDEBAR_WIDTH = 232
 
@@ -226,7 +227,7 @@ class MainWindow(QMainWindow):
             QShortcut(QKeySequence(sequence), self, activated=handler)
 
         bind(QKeySequence.StandardKey.Open, self.open_dialog)
-        bind(QKeySequence.StandardKey.Save, self.save_as)
+        bind(QKeySequence.StandardKey.Save, self.save)
         bind(QKeySequence.StandardKey.SaveAs, self.save_as)
         bind(Qt.Key.Key_F11, self.present)
         bind(Qt.Key.Key_F1, self.show_help)
@@ -302,7 +303,7 @@ class MainWindow(QMainWindow):
 
     def set_nav(self, key: str) -> None:
         if key == "arrange" and isinstance(self.current_view(), MarkdownTab):
-            self.notify("Arrange is for PDF and PowerPoint files. Markdown is read-only here.")
+            self.notify("Arrange is for PDF and PowerPoint files. Markdown pages are not arranged.")
             key = "view"
         self.nav_mode = key
         self._sync_nav()
@@ -313,7 +314,7 @@ class MainWindow(QMainWindow):
             self.nav_mode = "view"
         self.nav_items[self.nav_mode].setChecked(True)
         if self.nav_mode == "split":
-            splittable = view if view is not None and not isinstance(view, MarkdownTab) else None
+            splittable = view if view is not None and view.document.family in ("pdf", "office") else None
             self.split_merge.set_document(splittable.document if splittable else None, (lambda: splittable._selection()) if splittable else None)
             self.stack.setCurrentWidget(self.split_merge)
         elif self.nav_mode == "protection":
@@ -376,12 +377,14 @@ class MainWindow(QMainWindow):
             view = MarkdownTab(document)
             view.link_opened.connect(lambda value: self.open_paths([value]))
         else:
-            document = Document(self.workspace, opened, self)
+            document = (WordDocument if opened.kind.family == "word" else Document)(self.workspace, opened, self)
             document.add_font_notes()
             view = DocumentView(document)
         view.message.connect(self.notify)
         view.present_requested.connect(self.present)
         view.save_requested.connect(self.save_as)
+        if isinstance(view, MarkdownTab):
+            view.save_in_place_requested.connect(lambda v=view: self.save_to(v.document, v.document.path))
         view.details_requested.connect(lambda: self.set_nav("protection"))
         view.insert_file_requested.connect(self.insert_file)
         view.paste_requested.connect(view.paste_pages)
@@ -502,6 +505,10 @@ class MainWindow(QMainWindow):
             return "PDF (*.pdf)"
         if document.family == "markdown":
             return "Markdown (*.md *.markdown)"
+        if document.format == "doc":
+            return "Word 97-2003 (*.doc);;Word (*.docx);;PDF (*.pdf)"
+        if document.format == "docx":
+            return "Word (*.docx);;PDF (*.pdf)"
         if document.format == "ppt":
             return "PowerPoint 97-2003 (*.ppt);;PowerPoint (*.pptx)"
         return "PowerPoint (*.pptx)"
@@ -512,7 +519,9 @@ class MainWindow(QMainWindow):
     def _confirm_overwrite_original(self, document: Document, out: Path) -> bool:
         if not self._is_original(document, out):
             return True
-        return widgets.ask(
+        if getattr(document, "replace_confirmed", False):
+            return True  # asked once already for this document
+        confirmed = widgets.ask(
             self,
             "Replace the original file?",
             f"This replaces {out.name} on disk with the current version. This is the only way James Viewer ever changes an original.",
@@ -520,12 +529,24 @@ class MainWindow(QMainWindow):
             "Cancel",
             danger=True,
         )
+        if confirmed and hasattr(document, "replace_confirmed"):
+            document.replace_confirmed = True
+        return confirmed
+
+    def save(self) -> None:
+        """Ctrl+S: an edited Markdown file is saved where it is. Everything else gets Save As."""
+        view = self.current_view()
+        if isinstance(view, MarkdownTab) and view.document.dirty:
+            view.canvas.close_editor(True)
+            self.save_to(view.document, view.document.path)
+            return
+        self.save_as()
 
     def save_as(self) -> None:
         document = self.current_document()
         if document is None or not document.pages:
             return
-        extension = {"pdf": ".pdf", "ppt": ".ppt", "md": document.path.suffix}.get(document.format, ".pptx")
+        extension = {"pdf": ".pdf", "ppt": ".ppt", "doc": ".doc", "docx": ".docx", "md": document.path.suffix}.get(document.format, ".pptx")
         suggested = document.path.with_name(f"{document.path.stem} copy{extension}")
         out, _selected = QFileDialog.getSaveFileName(self, "Save As", str(suggested), self._save_filter(document))
         if not out:
@@ -549,7 +570,7 @@ class MainWindow(QMainWindow):
             lambda: document.save_copy(out, unprotected=unprotected),
             finished,
             lambda error: widgets.tell(self, f"Could not save {out.name}", str(error)),
-            office=document.format == "ppt",
+            office=document.format == "ppt" or document.family == "word",
         )
 
     def save_unprotected(self) -> None:
@@ -681,8 +702,8 @@ class MainWindow(QMainWindow):
         except ViewerError as exc:
             widgets.tell(self, "Cannot merge", str(exc))
             return
-        if "markdown" in families:
-            widgets.tell(self, "Cannot merge", "Markdown files cannot be merged. Only PDF and PowerPoint files can.")
+        if families & {"markdown", "word"}:
+            widgets.tell(self, "Cannot merge", "Markdown and Word files cannot be merged here. Only PDF and PowerPoint files can.")
             return
         if len(families) != 1:
             widgets.tell(self, "Cannot merge", "PDF files and PowerPoint files cannot be merged together.")
@@ -798,7 +819,7 @@ class MainWindow(QMainWindow):
         self.open_paths(accepted)
         skipped = len(values) - len(accepted)
         if skipped:
-            self.notify(f"Skipped {skipped} file(s) that are not PDF, PPT or PPTX")
+            self.notify(f"Skipped {skipped} file(s) that are not PDF, PowerPoint, Word or Markdown files")
 
     def showEvent(self, event) -> None:
         super().showEvent(event)

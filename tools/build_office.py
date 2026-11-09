@@ -278,15 +278,34 @@ def add_profile_seed(output: Path) -> None:
     print(f"profile seed: {size_of(seed) / 1e6:.1f} MB", flush=True)
 
 
+# Found removable when the bundle only had to show PowerPoint files. Word files need them back.
+NEEDED_FOR_WORD = {
+    "program/mswordlo.dll",
+    "program/sw_writerfilterlo.dll",
+    "program/swdlo.dll",
+    "program/swlo.dll",
+    "program/swuilo.dll",
+    "share/registry/writer.xcd",
+    "share/config/soffice.cfg/modules/swriter",
+}
+
+
+def removable_entries() -> list[str]:
+    """The verified trim list, minus what Word files need."""
+    manifest = ROOT / "tools" / "office_removable.json"
+    if not manifest.exists():
+        return []
+    return [entry for entry in json.loads(manifest.read_text(encoding="utf-8")) if entry not in NEEDED_FOR_WORD]
+
+
 def main() -> None:
     source, output = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve()
     assemble_only = "--probe" not in sys.argv
     manifest = ROOT / "tools" / "office_removable.json"
     if assemble_only:
         assemble(source, output)
-        if manifest.exists():
-            for relative in json.loads(manifest.read_text(encoding="utf-8")):
-                delete(output / relative)
+        for relative in removable_entries():
+            delete(output / relative)
         add_profile_seed(output)
         print(f"bundle: {size_of(output) / 1e6:.0f} MB at {output}")
         return

@@ -38,7 +38,7 @@ sys.path.insert(0, str(ROOT / "src"))
 import pefile
 
 from build_app import QT_REMOVE, VERSION, size_of
-from build_office import assemble, delete
+from build_office import assemble, delete, removable_entries
 
 CONTROL = "--control" in sys.argv
 PARTS = ROOT / ".build" / ("arm64-control" if CONTROL else "arm64")
@@ -203,7 +203,7 @@ def build_office_bundle() -> Path:
     target = PARTS / "office"
     shutil.rmtree(target, ignore_errors=True)
     assemble(PARTS / "office-src", target)
-    for relative in json.loads((ROOT / "tools" / "office_removable.json").read_text(encoding="utf-8")):
+    for relative in removable_entries():
         delete(target / relative)
     for installer in target.glob("*.msi"):
         installer.unlink()
@@ -286,6 +286,7 @@ def main() -> None:
     licenses.mkdir(exist_ok=True)
     shutil.copyfile(ROOT / "docs" / "THIRD_PARTY.md", licenses / "THIRD_PARTY.md")
     shutil.copyfile(ROOT / "tests" / "fixtures" / "rich.pptx", licenses / "self-check.pptx")
+    shutil.copyfile(ROOT / "tests" / "fixtures" / "word-rich.docx", licenses / "self-check.docx")
     shutil.copyfile(ROOT / "tools" / "Self-check.cmd", app / "Self-check.cmd")
     print(f"app: {size_of(app) / 1e6:.0f} MB", flush=True)
     problems = verify(app)

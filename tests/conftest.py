@@ -117,10 +117,14 @@ class Harness:
         pump(0.1)
 
     def close_all(self) -> None:
+        self.answers.clear()
         for view in list(self.window.views):
             view.document._saved_pages = view.document.pages
             view.document._saved_format = view.document.format
+            if view.document.dirty:  # a Markdown document tracks its own text, so say yes to "Close without saving"
+                self.answers.append(True)
             self.window.close_tab(self.window.views.index(view))
+        assert not self.window.views, "a tab refused to close"
 
 
 @pytest.fixture(scope="session")
@@ -131,6 +135,9 @@ def main_window(qapp):
     window.show()
     pump(0.3)
     yield window
+    from james_viewer.ui import widgets
+
+    widgets.ask = lambda *args, **kwargs: True  # never leave a real question on screen when the tests end
     window.close()
 
 

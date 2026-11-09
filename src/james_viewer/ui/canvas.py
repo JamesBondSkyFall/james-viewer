@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QCursor, QGuiApplication, QLinearGradient, QPainter, QPainterPath
+from PySide6.QtGui import QColor, QCursor, QGuiApplication, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QAbstractScrollArea
 
 from ..core.pdf_engine import PDFIUM_LOCK
@@ -19,6 +19,8 @@ class PageCanvas(QAbstractScrollArea):
     zoom_changed = Signal(str)
     fullscreen_requested = Signal()
     text_copied = Signal(int)
+    place_requested = Signal(str, float, float)  # tool, then a point on the page in PDF points
+    ink_drawn = Signal(list)  # [[x, y], ...] in PDF points
 
     def __init__(self, document: Document, parent=None):
         super().__init__(parent)
@@ -37,6 +39,8 @@ class PageCanvas(QAbstractScrollArea):
         self._text_ref = None
         self._text_handles = None
         self._anchor = -1
+        self.tool: str | None = None  # note, text or ink while placing an annotation
+        self._stroke: list[QPointF] = []
         images = document.workspace.images
         images.available.connect(self._image_ready)
         document.renders_changed.connect(self.refresh)
@@ -159,6 +163,12 @@ class PageCanvas(QAbstractScrollArea):
                 painter.drawPixmap(rect, pixmap, QRectF(pixmap.rect()))
             self._paint_selection(painter, rect, ref)
         painter.restore()
+        if len(self._stroke) > 1:
+            pen = QPen(QColor("#d92e2e"), max(1.5, 2 * rect.width() / max(ref.width, 1) if ref else 2))
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.drawPolyline(self._stroke)
 
     def _paint_waiting(self, painter: QPainter, rect: QRectF) -> None:
         painter.setPen(QColor(theme.MUTED))
@@ -220,6 +230,12 @@ class PageCanvas(QAbstractScrollArea):
         if event.button() == Qt.MouseButton.MiddleButton:
             self._pan_origin = event.position().toPoint()
             self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
+        elif event.button() == Qt.MouseButton.LeftButton and self.tool == "ink":
+            self._stroke = [event.position()]
+        elif event.button() == Qt.MouseButton.LeftButton and self.tool in ("note", "text"):
+            point = self._page_point(event.position())
+            if point is not None and self._page_rect().contains(event.position()):
+                self.place_requested.emit(self.tool, point[0], point[1])
         elif event.button() == Qt.MouseButton.LeftButton:
             self._clear_selection()
             self._anchor = self._char_index(event.position())
@@ -233,15 +249,30 @@ class PageCanvas(QAbstractScrollArea):
             self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
             self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
             return
+        if self._stroke and event.buttons() & Qt.MouseButton.LeftButton:
+            self._stroke.append(position)
+            self.viewport().update()
+            return
         if event.buttons() & Qt.MouseButton.LeftButton and self._anchor >= 0:
             index = self._char_index(position)
             if index >= 0:
                 self._select(min(self._anchor, index), max(self._anchor, index))
             return
         over_page = self._page_rect().contains(position)
+        if self.tool and over_page:
+            self.viewport().setCursor(Qt.CursorShape.CrossCursor)
+            return
         self.viewport().setCursor(Qt.CursorShape.IBeamCursor if over_page and self._over_text(position) else Qt.CursorShape.ArrowCursor)
 
     def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._stroke:
+            points = [self._page_point(point) for point in self._stroke]
+            self._stroke = []
+            self.viewport().update()
+            points = [[round(x, 2), round(y, 2)] for x, y in (p for p in points if p is not None)]
+            if len(points) > 1:
+                self.ink_drawn.emit(points)
+            return
         if event.button() == Qt.MouseButton.MiddleButton:
             self._pan_origin = None
             self.viewport().unsetCursor()
@@ -326,6 +357,14 @@ class PageCanvas(QAbstractScrollArea):
     @property
     def has_selection(self) -> bool:
         return self._selection is not None
+
+    def selection_rects(self) -> list[list[float]]:
+        """The selected text's boxes in PDF points: left, bottom, right, top."""
+        return [[round(value, 2) for value in rect] for rect in self._rects]
+
+    def clear_selection(self) -> None:
+        self._clear_selection()
+        self.viewport().update()
 
     def selected_text(self) -> str:
         if self._selection is None:

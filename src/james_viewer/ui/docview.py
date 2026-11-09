@@ -5,7 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QMenu, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy,
+    QCheckBox, QFrame, QHBoxLayout, QLabel, QMenu, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy,
     QStackedWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -34,7 +34,14 @@ class TextPanel(QFrame):
         layout.addWidget(widgets.eyebrow("Edit text"))
         self.heading = widgets.title("Slide", 17)
         layout.addWidget(self.heading)
-        self.hint = widgets.body("Press Enter for a new paragraph and Shift+Enter for a line break. Text in charts and SmartArt cannot be edited here.", 12)
+        self.word = document.family == "word"
+        hint = (
+            "Each box is one paragraph on this page, and its formatting is kept. Shift+Enter makes a line break. "
+            "Paragraphs holding page numbers or a table of contents cannot be edited here."
+            if self.word else
+            "Press Enter for a new paragraph and Shift+Enter for a line break. Text in charts and SmartArt cannot be edited here."
+        )
+        self.hint = widgets.body(hint, 12)
         layout.addWidget(self.hint)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -45,6 +52,15 @@ class TextPanel(QFrame):
         self.stack.setSpacing(6)
         self.scroll.setWidget(self.holder)
         layout.addWidget(self.scroll, 1)
+        self.font_box = QCheckBox("Times New Roman for my changes")
+        self.font_box.setToolTip("English letters in the paragraphs you change use Times New Roman. Chinese keeps its font.")
+        self.font_all = QPushButton("Times New Roman for all English text")
+        self.font_all.setCheckable(True)
+        self.font_all.setToolTip("English letters everywhere in the document use Times New Roman. Chinese keeps its font.")
+        self.font_all.clicked.connect(self._font_everywhere)
+        if self.word:
+            layout.addWidget(self.font_box)
+            layout.addWidget(self.font_all)
         row = QHBoxLayout()
         row.addStretch(1)
         self.revert = QPushButton("Revert")
@@ -69,14 +85,16 @@ class TextPanel(QFrame):
         self._blocks = []
         if not 0 <= self.position < len(self.document.pages):
             return
-        self.heading.setText(f"Slide {self.position + 1}")
+        self.heading.setText(f"{self.document.noun.capitalize()} {self.position + 1}")
+        if self.word:
+            self.font_all.setChecked(self.document.font_everywhere)
         try:
             self._blocks = self.document.text_blocks(self.position)
         except ViewerError as exc:
             self.stack.addWidget(widgets.body(str(exc)))
             return
         if not self._blocks:
-            self.stack.addWidget(widgets.body("This slide has no editable text."))
+            self.stack.addWidget(widgets.body(f"This {self.document.noun} has no editable text."))
         for block in self._blocks:
             caption = QLabel(block.name)
             caption.setFont(theme.sans(11, theme.QFont.Weight.Medium))
@@ -100,9 +118,18 @@ class TextPanel(QFrame):
             for block, editor in zip(self._blocks, self._editors)
             if self._raw_text(editor) != block.text
         ]
-        if changes:
+        if self.word:
+            self.document.edit_text(self.position, changes, latin_font=self.font_box.isChecked())
+            self.load()
+        elif changes:
             self.document.edit_text(self.position, changes)
             self.load()
+
+    def _font_everywhere(self, on: bool) -> None:
+        try:
+            self.document.set_font_everywhere(on)
+        except ViewerError:
+            self.font_all.setChecked(not on)
 
 
 class DocumentView(QWidget):
@@ -182,9 +209,28 @@ class DocumentView(QWidget):
         self.redo_button.clicked.connect(self.redo)
         row.addWidget(self.undo_button)
         row.addWidget(self.redo_button)
-        self.text_toggle = widgets.tool_button("text", "Edit slide text", checkable=True)
+        self.text_toggle = widgets.tool_button("text", "Edit text", checkable=True)
         self.text_toggle.clicked.connect(self._toggle_text_panel)
         row.addWidget(self.text_toggle)
+        self.mark_buttons = {}
+        for name, tip in (
+            ("highlight", "Highlight the selected text"),
+            ("underline", "Underline the selected text"),
+        ):
+            button = widgets.tool_button(name, tip)
+            button.clicked.connect(lambda _checked=False, kind=name: self._mark(kind))
+            row.addWidget(button)
+            self.mark_buttons[name] = button
+        self.tool_buttons = {}
+        for name, icon_name, tip in (
+            ("note", "note", "Add a note: click here, then click on the page"),
+            ("text", "textbox", "Add a text box: click here, then click on the page"),
+            ("ink", "ink", "Draw: drag on the page with the mouse or a pen"),
+        ):
+            button = widgets.tool_button(icon_name, tip, checkable=True)
+            button.toggled.connect(lambda checked, tool=name: self._tool_toggled(tool, checked))
+            row.addWidget(button)
+            self.tool_buttons[name] = button
         row.addSpacing(14)
         self.status_label = QLabel("")
         self.status_label.setFont(theme.sans(12))
@@ -223,6 +269,8 @@ class DocumentView(QWidget):
         self.canvas.zoom_changed.connect(self.zoom_label.setText)
         self.canvas.fullscreen_requested.connect(self.present_requested)
         self.canvas.text_copied.connect(lambda n: self.message.emit(f"Copied {n} characters"))
+        self.canvas.place_requested.connect(self._place)
+        self.canvas.ink_drawn.connect(self._ink)
         row.addWidget(self.canvas, 1)
         self.text_panel = TextPanel(self.document)
         self.text_panel.hide()
@@ -302,7 +350,12 @@ class DocumentView(QWidget):
         self.modes.setCurrentIndex(0 if mode == "view" else 1)
         for widget in (self.zoom_out, self.zoom_in, self.zoom_label, self.layout_toggle):
             widget.setVisible(mode == "view")
-        self.text_toggle.setVisible(mode == "view" and self.document.family == "office")
+        self.text_toggle.setVisible(mode == "view" and self.document.family in ("office", "word"))
+        for button in list(self.mark_buttons.values()) + list(self.tool_buttons.values()):
+            button.setVisible(mode == "view" and self.document.family == "pdf")
+        if mode != "view":
+            for button in self.tool_buttons.values():
+                button.setChecked(False)
         if mode == "arrange":
             self.grid.select_position(self.document.current)
             self.grid.setFocus()
@@ -329,6 +382,8 @@ class DocumentView(QWidget):
         for button in (self.duplicate_button, self.delete_button, self.add_button, self.paste_button):
             button.setEnabled(editable and total > 0)
         self.text_toggle.setEnabled(document.can_edit_text)
+        for button in list(self.mark_buttons.values()) + list(self.tool_buttons.values()):
+            button.setEnabled(document.can_annotate and total > 0)
         self.arrange_eyebrow.setText(f"ARRANGE {document.noun.upper()}S")
         if document.preparing:
             done = sum(1 for i in range(total) if document.ref_at(i) is not None)
@@ -379,26 +434,28 @@ class DocumentView(QWidget):
         view = self.grid if self.mode == "arrange" else self.rail
         return view.selected_positions()
 
-    def _guard(self) -> bool:
-        """Editing needs a PPTX, so a .ppt is converted first, after asking."""
+    def _guard(self, text: bool = False) -> bool:
+        """Editing needs a PPTX or DOCX, so a .ppt or .doc is converted first, after asking."""
         document = self.document
-        if not document.can_edit_pages:
+        if not (document.can_edit_text if text else document.can_edit_pages):
             self.message.emit(document.edit_block_reason)
             return False
         if document.preparing:
             self.message.emit("This document is still being prepared.")
             return False
-        if document.format != "ppt":
+        if document.format not in ("ppt", "doc"):
             return True
+        word = document.format == "doc"
+        modern, kind = ("DOCX", "Word") if word else ("PPTX", "PowerPoint")
         if widgets.ask(
             self,
-            "Convert to PPTX for editing?",
-            "PowerPoint 97-2003 files are edited as PPTX. James Viewer will work on a converted copy and "
-            "your original .ppt will not be changed. Some formatting may shift.",
+            f"Convert to {modern} for editing?",
+            f"{kind} 97-2003 files are edited as {modern}. James Viewer will work on a converted copy and "
+            f"your original .{document.format} will not be changed. Some formatting may shift.",
             "Convert",
         ):
-            self.status_label.setText("Converting to PPTX…")
-            document.convert_to_pptx(lambda: self.message.emit("Converted. You can edit this document now."))
+            self.status_label.setText(f"Converting to {modern}…")
+            document.convert_for_editing(lambda: self.message.emit("Converted. You can edit this document now."))
         return False
 
     def _try(self, action, *args) -> None:
@@ -476,8 +533,63 @@ class DocumentView(QWidget):
             count = len(clip["pages"])
             self._try(self.document.insert_pages, clip["pages"], at, f"Paste {count} {self.document.noun}{'' if count == 1 else 's'}")
 
+    # -- PDF annotations --------------------------------------------------------------------------------------
+
+    def _annotation_blocked(self) -> bool:
+        document = self.document
+        if not document.can_annotate:
+            self.message.emit("The author of this PDF does not allow comments or highlights to be added.")
+            return True
+        page = document.pages[document.current]
+        ref = document.ref_at(document.current)
+        from ..core.pdf_annotations import page_rotation
+
+        if page_rotation(page.source, ref.password if ref else document.password, page.index):
+            self.message.emit("Annotations on rotated pages are not supported yet.")
+            return True
+        return False
+
+    def _mark(self, kind: str) -> None:
+        if not self.canvas.has_selection:
+            self.message.emit(f"Select some text on the page first, then choose {kind.capitalize()}.")
+            return
+        if self._annotation_blocked():
+            return
+        rects = self.canvas.selection_rects()
+        self.canvas.clear_selection()
+        self._try(self.document.annotate, self.document.current, {"type": kind, "rects": rects}, kind.capitalize())
+
+    def _tool_toggled(self, tool: str, checked: bool) -> None:
+        if checked:
+            for name, button in self.tool_buttons.items():
+                if name != tool and button.isChecked():
+                    button.setChecked(False)
+            self.canvas.tool = tool
+        elif self.canvas.tool == tool:
+            self.canvas.tool = None
+
+    def _place(self, tool: str, x: float, y: float) -> None:
+        if self._annotation_blocked():
+            return
+        heading = "Add a note" if tool == "note" else "Add a text box"
+        text = widgets.ask_text(self, heading, "Text:")
+        if not text:
+            return
+        if tool == "note":
+            self._try(self.document.annotate, self.document.current, {"type": "note", "x": x, "y": y, "text": text}, "Add note")
+            return
+        from .annotation_text import measure
+
+        width, height = measure(text, 12)
+        rect = [x, y - height, x + width, y]
+        self._try(self.document.annotate, self.document.current, {"type": "text", "rect": rect, "text": text, "size": 12}, "Add text box")
+
+    def _ink(self, points: list) -> None:
+        if not self._annotation_blocked():
+            self._try(self.document.annotate, self.document.current, {"type": "ink", "paths": [points], "width": 2}, "Draw")
+
     def _toggle_text_panel(self, checked: bool) -> None:
-        if checked and not self._guard():
+        if checked and not self._guard(text=True):
             self.text_toggle.setChecked(False)
             return
         self.text_panel.setVisible(checked)
